@@ -1,0 +1,76 @@
+# ============================================================================
+# Tempo — MULTITENANT, backed by S3 (SeaweedFS by default).
+# multitenancy_enabled: true makes Tempo REQUIRE X-Scope-OrgID.
+# Per-tenant retention lives in overrides.yaml (rendered from tenants.yaml).
+# ============================================================================
+
+multitenancy_enabled: true         # tenant = X-Scope-OrgID = project
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+
+ingester:
+  lifecycler:
+    ring:
+      kvstore: { store: inmemory }
+      replication_factor: 1
+    final_sleep: 0s
+  trace_idle_period: 10s
+  max_block_bytes: 1000000
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    compaction_window: 1h
+    max_block_bytes: 100000000
+    block_retention: 720h          # 30d default; per-tenant values override
+    compacted_block_retention: 1h
+
+storage:
+  trace:
+    backend: s3
+    s3:
+      endpoint: ${S3_ENDPOINT}
+      bucket: ${BUCKET_TEMPO}
+      region: ${S3_REGION}
+      access_key: ${S3_ACCESS_KEY_ID}
+      secret_key: ${S3_SECRET_ACCESS_KEY}
+      insecure: ${S3_INSECURE}            # http on the internal net; false for AWS
+      forcepathstyle: ${S3_FORCE_PATH_STYLE}
+    wal:
+      path: /var/tempo/wal
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://mimir:9009/api/v1/push
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+  processor:
+    span_metrics:
+      dimensions: [service, span_name, span_kind, status_code, deployment_environment]
+
+# Per-tenant overrides (retention etc.) + default metrics_generator processors.
+overrides:
+  per_tenant_override_config: /etc/tempo/overrides.yaml
+  defaults:
+    # Setting `defaults` replaces Tempo's built-in defaults, so we MUST restate
+    # the per-tenant ingestion rate limit or it falls back to 0 (drops all spans).
+    ingestion:
+      rate_limit_bytes: 15000000     # 15 MB/s per tenant
+      burst_size_bytes: 25000000
+    metrics_generator:
+      processors: [service-graphs, span-metrics, local-blocks]

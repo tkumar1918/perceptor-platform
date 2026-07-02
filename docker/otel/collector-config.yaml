@@ -1,0 +1,102 @@
+# ============================================================================
+# Gateway collector.
+# Caddy has already authenticated the project and put X-Scope-OrgID in the
+# request metadata. headers_setter reads it from context and forwards it
+# UNCHANGED to every backend, so each signal lands in the right tenant.
+# ============================================================================
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+  # Persistent queue: telemetry survives a collector restart / backend blip.
+  file_storage/queue:
+    directory: /var/lib/otelcol/queue
+    timeout: 10s
+
+  # Forward the tenant id that Caddy injected.
+  headers_setter:
+    headers:
+      - action: upsert
+        key: X-Scope-OrgID
+        from_context: x-scope-orgid
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        include_metadata: true     # required so from_context can read the header
+      http:
+        endpoint: 0.0.0.0:4318
+        include_metadata: true
+
+processors:
+  # MUST be first: drops data instead of OOM-killing the collector under load.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  # metadata_keys keeps tenants in SEPARATE batches — never merge across tenants.
+  batch:
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+    timeout: 1s
+    metadata_keys: [X-Scope-OrgID]
+
+  # Promote a couple of resource attributes to data-point/span attributes so
+  # dashboards can filter on them consistently.
+  transform/env:
+    metric_statements:
+      - context: datapoint
+        statements:
+          - set(attributes["deployment_environment"], resource.attributes["deployment.environment"])
+    trace_statements:
+      - context: span
+        statements:
+          - set(attributes["deployment_environment"], resource.attributes["deployment.environment"])
+
+exporters:
+  prometheusremotewrite:
+    endpoint: http://mimir:9009/api/v1/push
+    tls: { insecure: true }
+    auth: { authenticator: headers_setter }
+    retry_on_failure: { enabled: true }
+
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls: { insecure: true }
+    auth: { authenticator: headers_setter }
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+    retry_on_failure: { enabled: true }
+
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls: { insecure: true }
+    auth: { authenticator: headers_setter }
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+    retry_on_failure: { enabled: true }
+
+service:
+  extensions: [health_check, file_storage/queue, headers_setter]
+  telemetry:
+    metrics:
+      level: detailed       # the collector's own health, scrapeable on :8888
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/env, batch]
+      exporters: [prometheusremotewrite]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/env, batch]
+      exporters: [otlp/tempo]

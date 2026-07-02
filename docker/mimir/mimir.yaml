@@ -1,0 +1,76 @@
+# ============================================================================
+# Mimir — monolithic, MULTITENANT, backed by S3 (SeaweedFS by default).
+# Per-tenant retention/limits live in overrides.yaml (rendered from tenants.yaml).
+# Credentials are expanded from env at startup (-config.expand-env=true).
+# ============================================================================
+
+multitenancy_enabled: true        # tenant = X-Scope-OrgID = project
+
+common:
+  storage:
+    backend: s3
+    s3:
+      endpoint: ${S3_ENDPOINT}
+      region: ${S3_REGION}
+      access_key_id: ${S3_ACCESS_KEY_ID}
+      secret_access_key: ${S3_SECRET_ACCESS_KEY}
+      insecure: ${S3_INSECURE}            # http on the internal net; false for AWS
+      bucket_lookup_type: ${S3_BUCKET_LOOKUP}  # path for self-host; auto for AWS
+
+blocks_storage:
+  backend: s3
+  s3:
+    bucket_name: ${BUCKET_MIMIR}
+  tsdb:
+    dir: /data/mimir/tsdb
+  bucket_store:
+    sync_dir: /data/mimir/tsdb-sync
+
+# Ruler/alertmanager inherit the S3 backend from `common` but have no bucket,
+# which fails Mimir's startup sanity check. We don't use them yet, so pin them
+# to local filesystem. (Give them their own S3 buckets if you enable alerting.)
+ruler_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/mimir/ruler-storage
+alertmanager_storage:
+  backend: filesystem
+  filesystem:
+    dir: /data/mimir/alertmanager-storage
+
+compactor:
+  data_dir: /data/mimir/compactor
+  sharding_ring:
+    kvstore: { store: memberlist }
+
+distributor:
+  ring:
+    kvstore: { store: memberlist }
+
+ingester:
+  ring:
+    kvstore: { store: memberlist }
+    replication_factor: 1          # single node; durability comes from S3 flush
+
+store_gateway:
+  sharding_ring:
+    kvstore: { store: memberlist }
+    replication_factor: 1
+
+server:
+  http_listen_port: 9009
+  grpc_listen_port: 9095
+
+memberlist:
+  bind_port: 7946
+  join_members: [mimir]
+
+# Per-tenant overrides (retention, ingestion rate, series caps).
+runtime_config:
+  file: /etc/mimir/overrides.yaml
+
+# Platform-wide defaults; per-tenant values in overrides.yaml win.
+limits:
+  compactor_blocks_retention_period: 30d
+  ingestion_rate: 25000
+  max_global_series_per_user: 300000

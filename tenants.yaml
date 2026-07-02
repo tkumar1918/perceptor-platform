@@ -1,0 +1,55 @@
+# ============================================================================
+# SOURCE OF TRUTH for every project (tenant) on the platform.
+#
+# Adding a project = add an entry here + run `make render` + `make reload`.
+# `make render` regenerates:
+#   - docker/caddy/Caddyfile               (token -> tenant map)
+#   - docker/mimir/overrides.yaml          (per-tenant metric retention/limits)
+#   - docker/loki/overrides.yaml           (per-tenant log retention/limits)
+#   - docker/tempo/overrides.yaml          (per-tenant trace retention)
+#   - docker/grafana/bootstrap/<id>.ndjson  (per-org datasource payloads, API-applied)
+#
+# `org_id` MUST be unique and stable. Org 1 is reserved for the platform admin.
+# Never reuse or renumber an org_id once a project is live.
+#
+# Ingest TOKENS are not set here. `make render` auto-generates one per tenant
+# into tenants.secrets.yaml (gitignored) and reuses it forever; to rotate, delete
+# that tenant's line there and re-render. This keeps tenants.yaml safe to commit.
+# ============================================================================
+
+defaults:
+  metrics_retention: 30d
+  logs_retention: 720h          # 30d (Loki uses hours)
+  traces_retention: 720h        # 30d (Tempo uses hours)
+  ingestion_rate: 25000         # samples/sec (Mimir)
+  max_series: 300000            # active series per tenant (Mimir)
+  # Tempo per-tenant overrides REPLACE (not merge with) the defaults, so these
+  # must be set for every tenant or trace ingestion silently drops to 0 bytes/s.
+  traces_rate_limit_bytes: 15000000   # 15 MB/s per tenant
+  traces_burst_bytes: 25000000
+
+tenants:
+  - id: project-alpha              # == X-Scope-OrgID. lowercase, no spaces.
+    org_id: 2
+    metrics_retention: 90d
+    logs_retention: 2160h          # 90d
+    traces_retention: 2160h        # 90d
+    ingestion_rate: 50000
+    max_series: 500000
+    display_name: "Project Al pha"
+
+  - id: project-beta
+    display_name: "Project Beta"
+    org_id: 3
+    metrics_retention: 90d
+    logs_retention: 2160h          # 90d
+    traces_retention: 2160h        # 90d
+
+  - id: project-tutor
+    display_name: "Tutor Service"
+    org_id: 4
+    metrics_retention: 90d
+    logs_retention: 2160h          # 90d
+    traces_retention: 2160h        # 90d
+    ingestion_rate: 50000
+    max_series: 500000
