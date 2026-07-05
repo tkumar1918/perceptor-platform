@@ -39,6 +39,7 @@ def load():
         cfg = yaml.safe_load(f)
     defaults = cfg.get("defaults", {})
     tenants = cfg["tenants"]
+    reserved = cfg.get("reserved", []) or []
 
     seen_ids, seen_orgs = set(), set()
     for t in tenants:
@@ -56,7 +57,25 @@ def load():
         # fold defaults in
         for k, v in defaults.items():
             t.setdefault(k, v)
-    return tenants
+
+    # Reserved platform tenants (e.g. _infra): a token + limits like any tenant,
+    # but no Grafana org of their own — read from the admin org (org 1). Their
+    # id must start with "_" so they can never collide with a project id.
+    for r in reserved:
+        if not r.get("id"):
+            sys.exit("reserved entry is missing required 'id'")
+        if not r["id"].startswith("_"):
+            sys.exit(f"reserved tenant id must start with '_': {r['id']}")
+        if r["id"] in seen_ids:
+            sys.exit(f"duplicate tenant id: {r['id']}")
+        if r.get("org_id"):
+            sys.exit(f"reserved tenant {r['id']} must not set org_id "
+                     "(its data is read from the admin org, org 1)")
+        seen_ids.add(r["id"])
+        for k, v in defaults.items():
+            r.setdefault(k, v)
+
+    return tenants, reserved
 
 
 def write(path, content):
@@ -227,16 +246,17 @@ def render_orgs(tenants):
 
 
 def main():
-    tenants = load()
-    print(f"Rendering {len(tenants)} tenant(s):")
-    ensure_tokens(tenants)
-    render_caddy(tenants)
-    render_mimir(tenants)
-    render_loki(tenants)
-    render_tempo(tenants)
-    render_datasources(tenants)
+    tenants, reserved = load()
+    ingest = tenants + reserved   # everything that ingests: projects + reserved
+    print(f"Rendering {len(tenants)} project tenant(s) + {len(reserved)} reserved:")
+    ensure_tokens(ingest)          # tokens/caddy/limits apply to ALL ingest tenants
+    render_caddy(ingest)
+    render_mimir(ingest)
+    render_loki(ingest)
+    render_tempo(ingest)
+    render_datasources(tenants)    # per-org datasources: projects only
     render_dashboards_provider(tenants)
-    render_orgs(tenants)
+    render_orgs(tenants)           # Grafana orgs: projects only (reserved use org 1)
     print("Done. Next: `make reload` (and `make bootstrap-orgs` on first run).")
 
 

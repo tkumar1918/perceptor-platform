@@ -7,3 +7,5 @@ overrides:
     retention_period: 2160h
   project-tutor:
     retention_period: 2160h
+  _infra:
+    retention_period: 2160h

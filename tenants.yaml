@@ -12,6 +12,11 @@
 # `org_id` MUST be unique and stable. Org 1 is reserved for the platform admin.
 # Never reuse or renumber an org_id once a project is live.
 #
+# `reserved:` (below) holds PLATFORM tenants, not projects — e.g. `_infra`, which
+# holds the stack's own host/container/system telemetry. They get a token +
+# retention/limits like any tenant, but NO Grafana org of their own: their data
+# is read from the admin org (org 1) via a file-provisioned datasource.
+#
 # Ingest TOKENS are not set here. `make render` auto-generates one per tenant
 # into tenants.secrets.yaml (gitignored) and reuses it forever; to rotate, delete
 # that tenant's line there and re-render. This keeps tenants.yaml safe to commit.
@@ -53,3 +58,16 @@ tenants:
     traces_retention: 2160h        # 90d
     ingestion_rate: 50000
     max_series: 500000
+
+# ============================================================================
+# RESERVED platform tenants (not projects — no dedicated Grafana org).
+# id MUST start with "_". Read from the admin org (org 1).
+# ============================================================================
+reserved:
+  - id: _infra                     # platform self-monitoring: the stack's own
+                                   # host, containers, system/edge logs. Also the
+                                   # catch-all for shared hosts. Admin-org only.
+    metrics_retention: 90d
+    logs_retention: 2160h          # 90d
+    # traces_retention folds in from defaults but is unused — infra emits no traces.
+    # ingestion_rate / max_series / traces_* fold in from defaults.

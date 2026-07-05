@@ -13,3 +13,7 @@ overrides:
     compactor_blocks_retention_period: 90d
     ingestion_rate: 50000
     max_global_series_per_user: 500000
+  _infra:
+    compactor_blocks_retention_period: 90d
+    ingestion_rate: 25000
+    max_global_series_per_user: 300000

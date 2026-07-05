@@ -1,0 +1,109 @@
+# ============================================================================
+# Infrastructure alerts — ADMIN org (org 1), evaluated against the _infra tenant.
+#
+# These are the platform watching its OWN health (the box running the stack).
+# Metrics come from the Alloy self-monitoring agent (node-exporter names).
+# Because the datasource (mimir-infra) is pinned to X-Scope-OrgID: _infra, these
+# only ever see infra data — no per-project metrics leak in.
+#
+# NOTE: rules only. Delivery needs a contact point + notification policy
+# (Grafana [smtp] or a webhook/Slack receiver) — configure that separately, or
+# these fire silently. The disk alerts are the whole reason this exists: the
+# stack can finally warn before its own disk fills.
+# ============================================================================
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: Infrastructure
+    folder: Infrastructure
+    interval: 1m
+    rules:
+
+      # ── Disk < 10% free — CRITICAL (the disk-fill guard) ──
+      - uid: infra_disk_critical
+        title: "Infra disk critically low (<10% free)"
+        condition: A
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: mimir-infra
+            model:
+              refId: A
+              instant: true
+              expr: |
+                100 * node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|aufs", mountpoint!~"/boot.*"}
+                / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|aufs", mountpoint!~"/boot.*"} < 10
+        annotations:
+          summary: "Disk critically low on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+          description: "Only {{ $values.A }}% free on {{ $labels.instance }} mount={{ $labels.mountpoint }}."
+        labels:
+          severity: critical
+
+      # ── Disk > 80% used — WARNING ──
+      - uid: infra_disk_warning
+        title: "Infra disk usage high (>80%)"
+        condition: A
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: mimir-infra
+            model:
+              refId: A
+              instant: true
+              expr: |
+                100 * (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|aufs", mountpoint!~"/boot.*"}
+                / node_filesystem_size_bytes{fstype!~"tmpfs|overlay|squashfs|aufs", mountpoint!~"/boot.*"}) > 80
+        annotations:
+          summary: "Disk >80% on {{ $labels.instance }}:{{ $labels.mountpoint }}"
+          description: "Disk {{ $values.A }}% used on {{ $labels.instance }} mount={{ $labels.mountpoint }}."
+        labels:
+          severity: warning
+
+      # ── CPU > 80% for 5m — WARNING ──
+      - uid: infra_cpu_high
+        title: "Infra CPU high (>80%)"
+        condition: A
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: mimir-infra
+            model:
+              refId: A
+              instant: true
+              expr: 100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 80
+        annotations:
+          summary: "CPU high on {{ $labels.instance }}"
+          description: "CPU {{ $values.A }}% on {{ $labels.instance }}."
+        labels:
+          severity: warning
+
+      # ── Memory > 80% — WARNING ──
+      - uid: infra_memory_high
+        title: "Infra memory high (>80%)"
+        condition: A
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: mimir-infra
+            model:
+              refId: A
+              instant: true
+              expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 80
+        annotations:
+          summary: "Memory high on {{ $labels.instance }}"
+          description: "RAM {{ $values.A }}% used on {{ $labels.instance }}."
+        labels:
+          severity: warning

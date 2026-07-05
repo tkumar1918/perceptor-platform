@@ -46,6 +46,7 @@ volumes:
   grafana-data:
   caddy-data:
   otel-queue:
+  alloy-data:
 
 services:
 
@@ -261,4 +262,41 @@ services:
       mimir: { condition: service_started }
       loki:  { condition: service_started }
       tempo: { condition: service_healthy }
+    networks: [obs]
+
+  # ---------------------------------------------------------------------------
+  # Alloy — CENTRAL self-monitoring agent. Scrapes THIS box's host + container
+  # metrics and tails its host + container logs, writing them to the reserved
+  # `_infra` tenant (admin org only). This is what finally lets the platform
+  # watch its own disk / CPU / RAM. Remote project-VM agents (Phase 1) run the
+  # same image but push through Caddy with a per-project token.
+  # ---------------------------------------------------------------------------
+  alloy:
+    image: grafana/alloy:v1.17.1
+    container_name: perceptor-alloy
+    logging: *logging
+    restart: unless-stopped
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+    environment:
+      VM_NAME: central-monitoring
+    # Host visibility for the unix (node) + cadvisor exporters and journald.
+    privileged: true
+    pid: host
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/:/var/lib/docker/:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      mimir: { condition: service_started }
+      loki:  { condition: service_started }
     networks: [obs]

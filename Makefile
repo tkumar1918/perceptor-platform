@@ -24,8 +24,9 @@ up: ## Start the whole stack (after `make render`)
 down: ## Stop the stack (keeps volumes/data)
 	@$(COMPOSE) down
 
-reload: render ## Re-render config and restart edge + backends to pick it up
-	@$(COMPOSE) --env-file .env restart caddy otel-collector mimir loki tempo grafana
+reload: render ## Re-render config, apply compose changes (new services), and restart to pick it up
+	@$(COMPOSE) --env-file .env up -d                        # create/recreate any new or changed services (e.g. alloy)
+	@$(COMPOSE) --env-file .env restart caddy otel-collector mimir loki tempo grafana alloy  # re-read rendered/provisioned config
 
 bootstrap-orgs: ## Create each project's Grafana org + tenant-pinned datasources (idempotent)
 	@set -a; . ./.env; set +a; bash scripts/grafana-bootstrap.sh

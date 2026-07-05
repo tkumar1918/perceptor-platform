@@ -19,3 +19,9 @@ overrides:
       burst_size_bytes: 25000000
     compaction:
       block_retention: 2160h
+  _infra:
+    ingestion:
+      rate_limit_bytes: 15000000
+      burst_size_bytes: 25000000
+    compaction:
+      block_retention: 720h
