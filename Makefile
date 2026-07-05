@@ -11,7 +11,7 @@ help: ## Show this help
 	  awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
 
 venv: ## Create local venv with PyYAML (for the renderer)
-	@test -d .venv || python3 -m venv .venv
+	@test -x $(PIP) || { rm -rf .venv && python3 -m venv .venv; }  # self-heal a missing/broken venv (e.g. one copied without pip)
 	@$(PIP) install -q --upgrade pip pyyaml
 
 render: venv ## Regenerate all per-tenant config from tenants.yaml

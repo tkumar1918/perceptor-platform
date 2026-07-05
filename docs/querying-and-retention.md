@@ -7,6 +7,10 @@ data. Once you internalize the model below, the limits stop being mysterious.
 
 > The examples use Loki (logs), but the same shape applies to Mimir (metrics)
 > and Tempo (traces): a small index + object storage + per-tenant limits.
+>
+> Companion: [data-lifecycle.md](./data-lifecycle.md) covers the *write* side —
+> when telemetry moves from memory → local WAL → S3, and why "queryable" is not
+> the same event as "in S3."
 
 ---
 

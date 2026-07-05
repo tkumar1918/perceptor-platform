@@ -25,6 +25,15 @@ x-s3-env: &s3-env
   BUCKET_LOKI: ${BUCKET_LOKI}
   BUCKET_TEMPO: ${BUCKET_TEMPO}
 
+# Bounded container-log rotation. Without this, the json-file driver grows the
+# per-container logs under /var/lib/docker forever and can fill the instance
+# disk. 3 files x 100MB = 300MB hard cap per container.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "3"
+
 networks:
   obs:
     driver: bridge
@@ -47,6 +56,7 @@ services:
   caddy:
     image: caddy:2.10
     container_name: perceptor-caddy
+    logging: *logging
     restart: unless-stopped
     depends_on:
       otel-collector:
@@ -65,6 +75,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.143.1
     container_name: perceptor-otel-collector
+    logging: *logging
     restart: unless-stopped
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
@@ -82,55 +93,69 @@ services:
       tempo:   { condition: service_healthy }
     networks: [obs]
 
+  # ===========================================================================
+  # STORAGE = EXTERNAL AWS S3 (see S3_* in .env). The two services below —
+  # `seaweedfs` (local object store) and `s3-init` (bucket creator) — are
+  # DISABLED for the AWS path: the buckets are pre-created in AWS, and the
+  # scoped IAM policy intentionally lacks ListAllMyBuckets / CreateBucket that
+  # s3-init requires (it would hang forever and block mimir/loki/tempo).
+  #
+  # To run FULLY LOCAL again (SeaweedFS, no AWS):
+  #   1. Uncomment both services below.
+  #   2. Revert the S3_* block in .env to the SeaweedFS values
+  #      (endpoint seaweedfs:8333, INSECURE=true, FORCE_PATH_STYLE=true, LOOKUP=path).
+  #   3. Re-add `s3-init: { condition: service_completed_successfully }` to the
+  #      depends_on of mimir, loki, and tempo.
+  # ===========================================================================
   # ---------------------------------------------------------------------------
   # Object storage — SeaweedFS (Apache-2.0, S3-compatible, durable backend for
   # all three signals). Generates its S3 credential file from env at startup so
   # no secret is baked into the image/config. Replaceable by AWS S3 via .env.
   # ---------------------------------------------------------------------------
-  seaweedfs:
-    image: chrislusf/seaweedfs:4.32
-    container_name: perceptor-seaweedfs
-    restart: unless-stopped
-    environment: *s3-env
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - |
-        mkdir -p /etc/seaweedfs
-        cat > /etc/seaweedfs/s3.json <<EOF
-        {"identities":[{"name":"perceptor","credentials":[{"accessKey":"$${S3_ACCESS_KEY_ID}","secretKey":"$${S3_SECRET_ACCESS_KEY}"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
-        EOF
-        exec weed server -dir=/data -s3 -s3.config=/etc/seaweedfs/s3.json
-    volumes:
-      - seaweedfs-data:/data
-    networks: [obs]
+  # seaweedfs:
+  #   image: chrislusf/seaweedfs:4.32
+  #   container_name: perceptor-seaweedfs
+  #   restart: unless-stopped
+  #   environment: *s3-env
+  #   entrypoint:
+  #     - /bin/sh
+  #     - -ec
+  #     - |
+  #       mkdir -p /etc/seaweedfs
+  #       cat > /etc/seaweedfs/s3.json <<EOF
+  #       {"identities":[{"name":"perceptor","credentials":[{"accessKey":"$${S3_ACCESS_KEY_ID}","secretKey":"$${S3_SECRET_ACCESS_KEY}"}],"actions":["Admin","Read","Write","List","Tagging"]}]}
+  #       EOF
+  #       exec weed server -dir=/data -s3 -s3.config=/etc/seaweedfs/s3.json
+  #   volumes:
+  #     - seaweedfs-data:/data
+  #   networks: [obs]
 
   # Ensures the per-signal buckets exist, then exits. Uses the generic S3 API
   # (aws-cli), so this same step works unchanged against AWS S3 / R2 / B2.
-  s3-init:
-    image: amazon/aws-cli:2.31.18
-    container_name: perceptor-s3-init
-    depends_on:
-      seaweedfs: { condition: service_started }
-    environment:
-      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
-      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
-      AWS_DEFAULT_REGION: ${S3_REGION}
-      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
-      BUCKET_MIMIR: ${BUCKET_MIMIR}
-      BUCKET_LOKI: ${BUCKET_LOKI}
-      BUCKET_TEMPO: ${BUCKET_TEMPO}
-    entrypoint:
-      - /bin/sh
-      - -ec
-      - |
-        until aws --endpoint-url "$$S3_ENDPOINT_URL" s3 ls >/dev/null 2>&1; do
-          echo "waiting for s3 at $$S3_ENDPOINT_URL"; sleep 2; done
-        for b in "$$BUCKET_MIMIR" "$$BUCKET_LOKI" "$$BUCKET_TEMPO"; do
-          aws --endpoint-url "$$S3_ENDPOINT_URL" s3 mb "s3://$$b" 2>/dev/null || true
-          echo "ensured bucket $$b"
-        done
-    networks: [obs]
+  # s3-init:
+  #   image: amazon/aws-cli:2.31.18
+  #   container_name: perceptor-s3-init
+  #   depends_on:
+  #     seaweedfs: { condition: service_started }
+  #   environment:
+  #     AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
+  #     AWS_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
+  #     AWS_DEFAULT_REGION: ${S3_REGION}
+  #     S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+  #     BUCKET_MIMIR: ${BUCKET_MIMIR}
+  #     BUCKET_LOKI: ${BUCKET_LOKI}
+  #     BUCKET_TEMPO: ${BUCKET_TEMPO}
+  #   entrypoint:
+  #     - /bin/sh
+  #     - -ec
+  #     - |
+  #       until aws --endpoint-url "$$S3_ENDPOINT_URL" s3 ls >/dev/null 2>&1; do
+  #         echo "waiting for s3 at $$S3_ENDPOINT_URL"; sleep 2; done
+  #       for b in "$$BUCKET_MIMIR" "$$BUCKET_LOKI" "$$BUCKET_TEMPO"; do
+  #         aws --endpoint-url "$$S3_ENDPOINT_URL" s3 mb "s3://$$b" 2>/dev/null || true
+  #         echo "ensured bucket $$b"
+  #       done
+  #   networks: [obs]
 
   # Makes the data volumes writable by the non-root uid the Grafana images run
   # as (10001), so we never have to run Loki/Tempo as root. Mimir runs as root
@@ -138,6 +163,7 @@ services:
   init-perms:
     image: busybox:1.37
     container_name: perceptor-init-perms
+    logging: *logging
     command: sh -ec "chown -R 10001:10001 /loki /tempo /otelq"
     volumes:
       - loki-data:/loki
@@ -151,6 +177,7 @@ services:
   mimir:
     image: grafana/mimir:3.0.2
     container_name: perceptor-mimir
+    logging: *logging
     restart: unless-stopped
     command: ["-config.file=/etc/mimir/mimir.yaml", "-config.expand-env=true"]
     environment: *s3-env
@@ -161,8 +188,7 @@ services:
     # No healthcheck: the Mimir image is distroless (no shell/wget to probe with).
     # Dependents gate on service_started; the collector's retry+queue covers the
     # brief warmup window.
-    depends_on:
-      s3-init: { condition: service_completed_successfully }
+    # (storage is external AWS S3 — no s3-init dependency; buckets pre-exist)
     networks: [obs]
 
   # ---------------------------------------------------------------------------
@@ -171,6 +197,7 @@ services:
   loki:
     image: grafana/loki:3.6.3
     container_name: perceptor-loki
+    logging: *logging
     restart: unless-stopped
     command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true"]
     environment: *s3-env
@@ -180,7 +207,6 @@ services:
       - loki-data:/var/loki
     # No healthcheck: the Loki image is distroless (no shell/wget to probe with).
     depends_on:
-      s3-init: { condition: service_completed_successfully }
       init-perms: { condition: service_completed_successfully }
     networks: [obs]
 
@@ -190,6 +216,7 @@ services:
   tempo:
     image: grafana/tempo:2.9.1
     container_name: perceptor-tempo
+    logging: *logging
     restart: unless-stopped
     command: ["-config.file=/etc/tempo/tempo.yaml", "-config.expand-env=true"]
     environment: *s3-env
@@ -203,7 +230,6 @@ services:
       timeout: 5s
       retries: 12
     depends_on:
-      s3-init: { condition: service_completed_successfully }
       init-perms: { condition: service_completed_successfully }
     networks: [obs]
 
@@ -213,6 +239,7 @@ services:
   grafana:
     image: grafana/grafana:12.3.1
     container_name: perceptor-grafana
+    logging: *logging
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
