@@ -36,7 +36,7 @@ tenants:
     traces_retention: 2160h        # 90d
     ingestion_rate: 50000
     max_series: 500000
-    display_name: "Project Al pha"
+    display_name: "Project Alpha"
 
   - id: project-beta
     display_name: "Project Beta"
