@@ -99,6 +99,14 @@ agents**. There are two, deliberately separate:
 
 Both push outbound only; neither opens inbound ports.
 
+A shared **"Infrastructure — hosts & containers"** dashboard ships with the stack
+([docker/grafana/dashboards/infra.json](docker/grafana/dashboards/infra.json)) —
+host CPU/mem/disk/net, per-container CPU/mem, and infra logs. Because infra
+telemetry is identical everywhere, **one dashboard works for every tenant**: it's
+auto-provisioned into the admin org (reading `_infra`) and imported into each
+project org by `make bootstrap-orgs`, where its datasource variables bind to that
+project's own Mimir/Loki. Pick your `vm` from the dropdown.
+
 ---
 
 ## Verifying it works

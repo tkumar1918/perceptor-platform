@@ -19,9 +19,20 @@ ADMIN_PASS="${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ORGS_FILE="$HERE/.orgs"
 BOOTSTRAP_DIR="$HERE/../docker/grafana/bootstrap"
+DASH_FILE="$HERE/../docker/grafana/dashboards/infra.json"
 
 [[ -f "$ORGS_FILE" ]] || { echo "Run 'make render' first (missing scripts/.orgs)"; exit 1; }
 auth=(-fsS -u "${ADMIN_USER}:${ADMIN_PASS}")
+
+# The shared infra dashboard is FILE-provisioned into the admin org (org 1)
+# automatically. Project orgs are created here at runtime, so file provisioning
+# can't reach them — we import the same dashboard into each via the API below.
+# It's portable: datasource template variables bind to each org's own Mimir/Loki,
+# so one JSON serves every tenant. (No-op if the file is absent.)
+DASH_PAYLOAD=""
+if [[ -f "$DASH_FILE" ]]; then
+  DASH_PAYLOAD="$(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m["id"]=None; print(json.dumps({"dashboard":m,"overwrite":True,"folderId":0}))' "$DASH_FILE")"
+fi
 
 # Wait for Grafana to be reachable.
 until curl -fsS -o /dev/null "${GRAFANA_URL}/api/health" 2>/dev/null; do
@@ -62,6 +73,17 @@ while IFS='|' read -r org_id id display_name; do
       *)       echo "  org ${org_id}: datasource ${name} FAILED (${code})"; exit 1 ;;
     esac
   done < "${BOOTSTRAP_DIR}/${id}.ndjson"
+
+  # 3) Import the shared infra dashboard into THIS org (active org is set above).
+  #    Non-fatal: a dashboard hiccup shouldn't abort org/datasource provisioning.
+  if [[ -n "$DASH_PAYLOAD" ]]; then
+    code=$(curl -s -o /dev/null -w '%{http_code}' -u "${ADMIN_USER}:${ADMIN_PASS}" \
+      -H 'Content-Type: application/json' -d "$DASH_PAYLOAD" "${GRAFANA_URL}/api/dashboards/db")
+    case "$code" in
+      200) echo "  org ${org_id}: infra dashboard imported" ;;
+      *)   echo "  org ${org_id}: infra dashboard import WARN (${code})" ;;
+    esac
+  fi
 done < "$ORGS_FILE"
 
 # Restore the admin session to org 1.
