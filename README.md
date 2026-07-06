@@ -51,6 +51,14 @@ OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer <project token from tenants.secr
 
 A request with no/invalid token gets `401` at Caddy and never reaches the stack.
 
+> **Instrument it well — read [docs/instrumenting-apps.md](docs/instrumenting-apps.md) first.**
+> What resource attributes to set (`service.name`, `deployment.environment.name`) and
+> the one rule that keeps a tenant fast and cheap: identify a service with a few
+> **stable, low-cardinality** labels, and keep high-cardinality detail (user / request /
+> order IDs) out of metric labels and log stream labels — put it on span attributes
+> instead. Getting this right is the difference between a snappy tenant and an
+> expensive, unqueryable one.
+
 ---
 
 ## Onboarding a new project
