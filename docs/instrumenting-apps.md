@@ -13,6 +13,43 @@ Everything below is that rule, applied.
 
 ---
 
+## Start here — the 2-minute version
+
+New to this? Don't read the whole page yet. Do these three things and you'll have
+working telemetry; come back for §2 onward when you want it *good*.
+
+**1. Get two values from your platform admin:**
+
+| You need | Looks like | What it is |
+|---|---|---|
+| **Edge URL** | `https://lgtm.runtheday.com` | where telemetry is sent |
+| **Project token** | `ptk_a1b2c3…` | your project's password — **keep it secret** |
+
+**2. Set these environment variables on your app** (no code changes — every OTel SDK reads them):
+
+```bash
+OTEL_SERVICE_NAME=checkout-api                       # name THIS app (pick a stable, human name)
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=production   # prod / staging / dev
+OTEL_EXPORTER_OTLP_ENDPOINT=https://<edge-host>:4318 # the Edge URL above
+OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer <your project token>
+```
+
+**3. Restart your app.** Within ~30s it shows up in your project's Grafana. Done.
+
+That's the whole minimum. The two fields that matter most — and the only ones you
+*must* think about — are `OTEL_SERVICE_NAME` (name it well) and the token (keep it
+secret). Everything below this line is how to go from "working" to "fast, cheap,
+and correlated."
+
+> **You never set your tenant.** Which project's data this becomes is decided by
+> your **token** at the edge — not by any attribute you send. So there's no
+> `tenant=` or `project=` field to set, and setting `service.namespace` to another
+> project's name does **nothing** (it can't cross the boundary; see §1). One less
+> thing to get wrong.
+
+---
+
 ## 1. Identify your service (resource attributes)
 
 Resource attributes describe *who is sending* and are attached to every signal.
@@ -37,6 +74,20 @@ OTEL_RESOURCE_ATTRIBUTES=service.namespace=shop,service.version=1.4.2,deployment
 > `service.name` is the single most important field. A missing one lands
 > everything under `unknown_service` — your logs and traces become an
 > unsearchable soup shared with every other unlabelled sender.
+
+### `service.namespace` is not your tenant
+
+A common mix-up: **`service.namespace` does not decide which project you write
+to.** Your **tenant** (the isolation/billing boundary) is set server-side from
+your **token** and cannot be changed by anything in the payload. `service.namespace`
+is just a *grouping label inside* your tenant — use it to bundle related services
+(a team, a bounded context), e.g. `service.namespace=shop`. On metrics it becomes
+the `job` prefix: `job="shop/checkout-api"`.
+
+So: same project VM/token → same tenant, always. Split services *within* it with
+`service.namespace` (group) and `service.name` (the service); split environments
+with `deployment.environment.name`. You cannot — and don't need to — name your
+tenant.
 
 ---
 
