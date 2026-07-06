@@ -32,6 +32,7 @@ prometheus.exporter.unix "host" {
 // ── Container metrics ──────────────────────────────────────────────────────
 prometheus.exporter.cadvisor "containers" {
 	docker_host            = "unix:///var/run/docker.sock"
+	docker_only            = true   // only real containers (needs containerd sock, mounted in compose)
 	store_container_labels = false
 }
 
@@ -42,7 +43,20 @@ prometheus.scrape "infra" {
 		prometheus.exporter.cadvisor.containers.targets,
 	)
 	scrape_interval = "15s"
-	forward_to      = [prometheus.remote_write.mimir.receiver]
+	forward_to      = [prometheus.relabel.infra.receiver]
+}
+
+// Harmonize container identity with logs: logs label containers `container=`,
+// cadvisor uses `name=`. Copy it so BOTH signals share `container` — one Grafana
+// dashboard variable then filters a container's logs AND metrics together.
+// (Copy only — `name`/`id` are kept, so no series can collapse.)
+prometheus.relabel "infra" {
+	forward_to = [prometheus.remote_write.mimir.receiver]
+
+	rule {
+		source_labels = ["name"]
+		target_label  = "container"
+	}
 }
 
 prometheus.remote_write "mimir" {

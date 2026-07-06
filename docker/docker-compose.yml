@@ -286,12 +286,15 @@ services:
     # Host visibility for the unix (node) + cadvisor exporters and journald.
     privileged: true
     pid: host
+    cgroup: host                          # share host cgroup ns → cadvisor sees ALL container cgroups (v2)
     volumes:
       - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro  # host cgroup fs at cadvisor's expected path
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/root:ro,rslave
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro  # cadvisor resolves container names/images via containerd
       - /var/lib/docker/:/var/lib/docker/:ro
       - /var/log/journal:/var/log/journal:ro
       - /etc/machine-id:/etc/machine-id:ro
