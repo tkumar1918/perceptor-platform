@@ -279,6 +279,13 @@ services:
     container_name: perceptor-alloy
     logging: *logging
     restart: unless-stopped
+    # Safety caps. The agent is the one component that can run away (a bad
+    # scrape/log loop once pegged this box at 800% CPU). Bounding it means a
+    # future runaway can't starve Mimir/Loki and take the stack — and with it
+    # self-monitoring — down with it. Steady state is ~220MB / a few %%; raise
+    # on very large hosts (cadvisor memory scales with container count).
+    mem_limit: 512m
+    cpus: 2
     command:
       - run
       - /etc/alloy/config.alloy
