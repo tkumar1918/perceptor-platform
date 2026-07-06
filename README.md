@@ -74,6 +74,24 @@ That's the whole flow. No hand-editing of six config files.
 
 ---
 
+## Monitoring the infrastructure
+
+App telemetry is what projects send *in*. Infra telemetry (host CPU/RAM/disk,
+container stats, system + container logs) is collected by **Grafana Alloy
+agents**. There are two, deliberately separate:
+
+- **Platform self-monitoring** — a central agent ([docker/alloy/](docker/alloy/))
+  watches the platform host itself and writes to the reserved **`_infra`** tenant
+  (admin-only). It ships with the stack; disk/CPU/mem alerts are pre-provisioned.
+- **Per-project VM monitoring** — an agent deployed on a **project's own VM**
+  ships that machine's infra into the **project's** tenant, tagged
+  `telemetry_source=infra` so it correlates with the project's apps without
+  mixing in. **Setup guide: [agent/README.md](agent/README.md).**
+
+Both push outbound only; neither opens inbound ports.
+
+---
+
 ## Verifying it works
 
 ```bash
