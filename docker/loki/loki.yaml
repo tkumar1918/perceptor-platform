@@ -44,5 +44,19 @@ compactor:
 limits_config:
   retention_period: 720h           # 30d
 
+  # Infra telemetry shipped by VM agents arrives via OTLP carrying these
+  # low-cardinality attributes. Promote them from structured metadata to real
+  # stream LABELS so infra logs are cheaply selectable — {telemetry_source="infra"}
+  # — and cleanly separable from a project's app logs, matching how the central
+  # _infra agent labels its own streams. App logs don't carry these attributes,
+  # so this is a no-op for them; everything else stays as structured metadata.
+  otlp_config:
+    log_attributes:
+      - action: index_label
+        attributes:
+          - telemetry_source
+          - vm
+          - job
+
 runtime_config:
   file: /etc/loki/overrides.yaml
