@@ -75,20 +75,6 @@ OTEL_RESOURCE_ATTRIBUTES=service.namespace=shop,service.version=1.4.2,deployment
 > everything under `unknown_service` — your logs and traces become an
 > unsearchable soup shared with every other unlabelled sender.
 
-### `service.namespace` is not your tenant
-
-A common mix-up: **`service.namespace` does not decide which project you write
-to.** Your **tenant** (the isolation/billing boundary) is set server-side from
-your **token** and cannot be changed by anything in the payload. `service.namespace`
-is just a *grouping label inside* your tenant — use it to bundle related services
-(a team, a bounded context), e.g. `service.namespace=shop`. On metrics it becomes
-the `job` prefix: `job="shop/checkout-api"`.
-
-So: same project VM/token → same tenant, always. Split services *within* it with
-`service.namespace` (group) and `service.name` (the service); split environments
-with `deployment.environment.name`. You cannot — and don't need to — name your
-tenant.
-
 ---
 
 ## 2. The cardinality rule — what becomes an indexed label
@@ -201,12 +187,91 @@ Grounding the advice above in the actual stack config, so you know why it matter
 
 ---
 
-## 8. Copy-paste starter
+## 8. Cardinality offenders — find them, fix them, or set the right value
+
+This is the checklist for *"what could quietly blow up my tenant, and what should
+it be instead."* Every row is something that either explodes series/streams or
+churns them on each deploy/restart. The **Set it to** column is the fix.
+
+> Many of these come from **auto-instrumentation defaults** — you didn't type them,
+> the agent did. The first table is the one that bites people who "just attached the
+> agent and it worked" (it did — until the series count crept up).
+
+### A. Resource attributes (identity — indexed as Loki labels, and metric identity)
+
+| Attribute | Default danger | Set it to |
+|---|---|---|
+| `service.instance.id` | **The OTel agents default this to a random UUID per process start.** It's an indexed Loki label and the metric `instance` → **every restart/redeploy makes a brand-new stream + instance**, churning storage and breaking "same instance over time" queries. | A **stable, bounded** id: the pod name, host+replica, or container name. `OTEL_SERVICE_INSTANCE_ID=checkout-api-1` (k8s: the pod name via downward API). |
+| `service.version` | New value every deploy → a fresh set of series each release (they age out, but a busy deploy cadence keeps many alive). | Keep it — deploy-correlation is worth it — but use a **clean version** (`1.4.2`), never a build timestamp or full git SHA+time. |
+| `deployment.environment.name` | If templated with a hostname, branch, or build id it stops being a 3-value enum. | A tiny enum: `production` / `staging` / `dev`. Nothing else. |
+| `service.namespace` | A per-instance or per-region value turns a grouping key into cardinality. | A few stable group names (team / bounded context). |
+| `host.name`, `container.id`, `k8s.pod.uid` | Auto-added and **high-cardinality** (new per container/pod). | Leave them — on this platform they land in **structured metadata / `target_info`, not indexed labels or metric labels**, so they're safe *as long as you don't manually copy them onto metric datapoints*. Don't. |
+
+### B. Metric datapoint attributes (⚠ **every attribute becomes a Prometheus label** — a series multiplier)
+
+| Offender | Why it explodes | Set it to |
+|---|---|---|
+| `http.target`, `url.path`, `http.url`, `url.full` | Raw path/URL = **one series per distinct URL** (with the id in it). | `http.route` — the **templated** route (`/users/{id}`). Drop the raw ones from metrics. |
+| `db.statement` / `db.query.text` | Raw SQL with literals = one series per query shape × values. | Never a metric label. Span attribute only, **parameterized** (agents sanitize by default — keep it). |
+| `user_agent.original` | Thousands of UA strings. | Off metrics. Span/log attribute if needed. |
+| `client.address`, `server.address`, `net.peer.*` | Per-client IP/host. | Off metrics. |
+| `messaging.destination.name` | Per-entity queue/topic names (e.g. `orders.user.48213`). | Templated destination, or off metrics. |
+| any `*.id` — `user_id`, `order_id`, `session_id`, `enduser.id` | Unbounded. | Never a metric label or log stream label → **span attribute**. |
+| `exception.message`, `exception.stacktrace` | Unique per error. | Off labels. `exception.type` (the class) is bounded and fine. |
+| **Label _combinations_** | Even bounded labels **multiply**: env(3) × route(50) × method(5) × status(8) × instance(20) ≈ 120k series for **one** metric. | Keep the label set small; question every added dimension. |
+
+### C. Metric names & instruments
+
+| Offender | Why | Set it to |
+|---|---|---|
+| A counter **per entity** (`orders_total{customer="…"}`) | One series per customer. | Bounded dimensions: `orders_total{status="paid\|failed"}`. Put the customer on a span. |
+| Metric **name** with an embedded id (`queue_depth_orders_48213`) | One metric per id — worse than a label. | One metric, id as a bounded label or not at all. |
+| Hand-rolled histograms with many custom buckets | buckets × every label combo. | Start with SDK default buckets; only tune when you have a reason. |
+
+### D. Logs (Loki)
+
+On this platform Loki indexes **only** the resource-attribute allow-list (verified:
+`service_name`, `service_namespace`, `deployment_environment_name`,
+`service_instance_id`). Everything else — `trace_id`, `thread`, `level`, your
+`user_id` — is **structured metadata**: queryable with `| key="value"`, *not* an
+indexed stream label. So the log rule is simple: **don't promote high-card fields to
+stream labels**, and the one to watch is `service.instance.id` (row A above). Attach
+everything else freely as attributes.
+
+### Find your offenders (run against your own tenant)
+
+```bash
+# 1) Loki — how many stream labels are indexed? Expect a short list (~4-6).
+#    If you see trace_id / thread / an *_id here, something is over-promoting it.
+curl -s -H "X-Scope-OrgID: <your-tenant>" \
+  "$EDGE/loki/api/v1/labels" | jq '.data'
+
+# 2) Loki — cardinality of a suspect label (how many distinct values):
+curl -s -H "X-Scope-OrgID: <your-tenant>" \
+  "$EDGE/loki/api/v1/label/service_instance_id/values" | jq '.data | length'
+
+# 3) Mimir — your 10 highest-series metrics (the usual explosion suspects):
+#    (run in Grafana Explore on your Mimir datasource)
+topk(10, count by (__name__)({__name__=~".+"}))
+
+# 4) Mimir — is `instance` churning? distinct instances for your service:
+count(count by (instance) (up{service_name="<your-service>"}))
+```
+
+If (1) shows more than the expected labels, or (4) climbs every deploy, you've found
+a churn source — map it back to the tables above and set the proper value.
+
+---
+
+## 9. Copy-paste starter
 
 ```bash
 # --- identity (resource attributes) ---
 OTEL_SERVICE_NAME=checkout-api
 OTEL_RESOURCE_ATTRIBUTES=service.namespace=shop,service.version=1.4.2,deployment.environment.name=production
+# pin the instance id to a STABLE value — the agent otherwise defaults it to a
+# random UUID that churns a new stream/series on every restart (see §8.A).
+OTEL_SERVICE_INSTANCE_ID=checkout-api-1        # k8s: use the pod name
 
 # --- where to send it ---
 OTEL_EXPORTER_OTLP_ENDPOINT=https://<edge-host>:4318
@@ -221,6 +286,7 @@ OTEL_TRACES_SAMPLER_ARG=0.1        # keep 10% of traces; metrics/logs stay 100%
 ### Checklist
 
 - [ ] `service.name` set, stable, one per deployable (not per replica).
+- [ ] `service.instance.id` pinned to a **stable** value (not the default random UUID).
 - [ ] `deployment.environment.name` set to a tiny enumerated set.
 - [ ] No user/request/order IDs in **metric labels** or **log stream labels**.
 - [ ] `http.route` (templated) on metrics, **not** raw paths.
