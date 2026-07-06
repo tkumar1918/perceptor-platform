@@ -107,6 +107,15 @@ discovery.docker "containers" {
 discovery.relabel "containers" {
 	targets = discovery.docker.containers.targets
 
+	// Never ingest our OWN logs. A collector that reads its own stderr can
+	// amplify into a runaway feedback loop if the log backend ever backpressures
+	// (export fails -> logs an error -> reads it back -> re-exports -> ...). Drop self.
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/perceptor-alloy"
+		action        = "drop"
+	}
+
 	// Opt-OUT escape hatch: the only label anyone ever *needs* — exclude a container.
 	rule {
 		source_labels = ["__meta_docker_container_label_perceptor_enable"]

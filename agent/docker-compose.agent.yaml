@@ -1,0 +1,44 @@
+# ============================================================================
+# Perceptor VM agent — deploy on each PROJECT VM (one per host).
+#
+#   cp .env.example .env    # fill in EDGE_ENDPOINT, PROJECT_TOKEN, VM_NAME
+#   docker compose -f docker-compose.agent.yaml up -d
+#
+# Ships this VM's host + container infra to the project's tenant, through the
+# platform edge, tagged telemetry_source=infra. No inbound ports are opened.
+# ============================================================================
+name: perceptor-agent
+
+services:
+  agent:
+    image: grafana/alloy:v1.17.1
+    container_name: perceptor-agent
+    restart: unless-stopped
+    command:
+      - run
+      - /etc/alloy/config.alloy
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=0.0.0.0:12345
+    env_file: .env                         # EDGE_ENDPOINT, PROJECT_TOKEN, VM_NAME
+    # Host + cgroup + containerd access for the node & cadvisor exporters.
+    privileged: true
+    pid: host
+    cgroup: host
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro,rslave
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
+      - /var/lib/docker/:/var/lib/docker/:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+      - agent-data:/var/lib/alloy/data
+    logging:
+      driver: json-file
+      options: { max-size: "100m", max-file: "3" }
+
+volumes:
+  agent-data:
