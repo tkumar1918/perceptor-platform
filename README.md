@@ -86,7 +86,8 @@ agents**. There are two, deliberately separate:
 - **Per-project VM monitoring** — an agent deployed on a **project's own VM**
   ships that machine's infra into the **project's** tenant, tagged
   `telemetry_source=infra` so it correlates with the project's apps without
-  mixing in. **Setup guide: [agent/README.md](agent/README.md).**
+  mixing in. It's a standalone, pullable bundle in its **own repo**:
+  **[github.com/tkumar1918/perceptor-agent](https://github.com/tkumar1918/perceptor-agent)**.
 
 Both push outbound only; neither opens inbound ports.
 
