@@ -34,6 +34,15 @@ x-logging: &logging
     max-size: "100m"
     max-file: "3"
 
+# Opt-in marker for the central Alloy agent. Log collection is opt-in (a
+# container's stdout is scraped only if it carries perceptor.enable=true), so the
+# platform's OWN stack services wear this to land their logs in the _infra tenant.
+# A new stack service without it is NOT self-monitored — add `labels:
+# *perceptor-monitored` when you add one. (The `alloy` agent itself is omitted on
+# purpose: it must not tail its own stderr — that's the feedback-loop guard.)
+x-perceptor-labels: &perceptor-monitored
+  perceptor.enable: "true"
+
 networks:
   obs:
     driver: bridge
@@ -57,6 +66,7 @@ services:
   caddy:
     image: caddy:2.10
     container_name: perceptor-caddy
+    labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
     depends_on:
@@ -76,6 +86,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.143.1
     container_name: perceptor-otel-collector
+    labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
     command: ["--config=/etc/otel-collector-config.yaml"]
@@ -181,6 +192,7 @@ services:
   mimir:
     image: grafana/mimir:3.0.2
     container_name: perceptor-mimir
+    labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
     command: ["-config.file=/etc/mimir/mimir.yaml", "-config.expand-env=true"]
@@ -201,6 +213,7 @@ services:
   loki:
     image: grafana/loki:3.6.3
     container_name: perceptor-loki
+    labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
     command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true"]
@@ -220,6 +233,7 @@ services:
   tempo:
     image: grafana/tempo:2.9.1
     container_name: perceptor-tempo
+    labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
     command: ["-config.file=/etc/tempo/tempo.yaml", "-config.expand-env=true"]
@@ -243,6 +257,7 @@ services:
   grafana:
     image: grafana/grafana:12.3.1
     container_name: perceptor-grafana
+    labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
     environment:

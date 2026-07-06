@@ -109,27 +109,32 @@ discovery.docker "containers" {
 	host = "unix:///var/run/docker.sock"
 }
 
-// Container log collection is LOW-TOUCH by design: every container is collected
-// automatically, no labels required. Containers may self-describe (Traefik-style)
-// via optional `perceptor.*` labels in THEIR OWN compose — honoured if present,
-// ignored if not. This config never needs editing to onboard a container.
+// Container log collection is OPT-IN: a container's stdout is collected only if
+// it sets  perceptor.enable: "true"  in its own compose. Nothing is scraped by
+// default. The platform's own stack services carry this label (see the
+// x-perceptor-labels anchor in docker-compose.yml), so _infra still gets every
+// backend's logs — but a co-tenant / unrelated container on this box is never
+// slurped just for existing. Onboard a new stack service by adding the label.
 discovery.relabel "containers" {
 	targets = discovery.docker.containers.targets
 
 	// Never ingest our OWN logs. A collector that reads its own stderr can
 	// amplify into a runaway feedback loop if the log backend ever backpressures
 	// (export fails -> logs an error -> reads it back -> re-exports -> ...). Drop self.
+	// (Also excluded by the opt-in keep below — this is a belt-and-braces guard.)
 	rule {
 		source_labels = ["__meta_docker_container_name"]
 		regex         = "/perceptor-alloy"
 		action        = "drop"
 	}
 
-	// Opt-OUT escape hatch: the only label anyone ever *needs* — exclude a container.
+	// OPT-IN: keep ONLY containers that explicitly set perceptor.enable=true.
+	// `keep` drops every target whose label doesn't match, so unlabelled
+	// containers are never collected.
 	rule {
 		source_labels = ["__meta_docker_container_label_perceptor_enable"]
-		regex         = "false"
-		action        = "drop"
+		regex         = "true"
+		action        = "keep"
 	}
 
 	// Optional self-declared identity (empty target = label simply not set).
