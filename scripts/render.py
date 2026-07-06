@@ -170,7 +170,9 @@ def render_loki(tenants):
 def render_tempo(tenants):
     # NOTE: Tempo per-tenant overrides REPLACE the defaults for that tenant
     # (they don't merge), so every limit the tenant needs must be restated here —
-    # notably the ingestion rate, or spans are dropped at 0 bytes/s.
+    # notably the ingestion rate (or spans are dropped at 0 bytes/s) AND the
+    # metrics_generator processors (or span-metrics/service-graphs silently
+    # turn OFF for that tenant — zero traces_spanmetrics_* in Mimir).
     lines = [GEN, "overrides:"]
     for t in tenants:
         lines += [
@@ -180,6 +182,8 @@ def render_tempo(tenants):
             f"      burst_size_bytes: {t['traces_burst_bytes']}",
             "    compaction:",
             f"      block_retention: {t['traces_retention']}",
+            "    metrics_generator:",
+            "      processors: [service-graphs, span-metrics, local-blocks]",
         ]
     write("tempo/overrides.yaml", "\n".join(lines) + "\n")
 

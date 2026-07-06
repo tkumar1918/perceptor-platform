@@ -7,21 +7,29 @@ overrides:
       burst_size_bytes: 25000000
     compaction:
       block_retention: 2160h
+    metrics_generator:
+      processors: [service-graphs, span-metrics, local-blocks]
   project-beta:
     ingestion:
       rate_limit_bytes: 15000000
       burst_size_bytes: 25000000
     compaction:
       block_retention: 2160h
+    metrics_generator:
+      processors: [service-graphs, span-metrics, local-blocks]
   project-tutor:
     ingestion:
       rate_limit_bytes: 15000000
       burst_size_bytes: 25000000
     compaction:
       block_retention: 2160h
+    metrics_generator:
+      processors: [service-graphs, span-metrics, local-blocks]
   _infra:
     ingestion:
       rate_limit_bytes: 15000000
       burst_size_bytes: 25000000
     compaction:
       block_retention: 720h
+    metrics_generator:
+      processors: [service-graphs, span-metrics, local-blocks]

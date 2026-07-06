@@ -46,16 +46,21 @@ processors:
     metadata_keys: [X-Scope-OrgID]
 
   # Promote a couple of resource attributes to data-point/span attributes so
-  # dashboards can filter on them consistently.
+  # dashboards can filter on them consistently. Both semconv spellings are
+  # handled: `deployment.environment` (pre-1.27 SDKs) first, then
+  # `deployment.environment.name` (current) — set() ignores nil, so whichever
+  # the SDK sent wins and the other is a no-op.
   transform/env:
     metric_statements:
       - context: datapoint
         statements:
           - set(attributes["deployment_environment"], resource.attributes["deployment.environment"])
+          - set(attributes["deployment_environment"], resource.attributes["deployment.environment.name"])
     trace_statements:
       - context: span
         statements:
           - set(attributes["deployment_environment"], resource.attributes["deployment.environment"])
+          - set(attributes["deployment_environment"], resource.attributes["deployment.environment.name"])
 
 exporters:
   prometheusremotewrite:

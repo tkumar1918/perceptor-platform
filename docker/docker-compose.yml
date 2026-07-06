@@ -165,7 +165,10 @@ services:
     image: busybox:1.37
     container_name: perceptor-init-perms
     logging: *logging
-    command: sh -ec "chown -R 10001:10001 /loki /tempo /otelq"
+    # Only recurse on first boot (or a wrong owner): `chown -R` over millions of
+    # accumulated WAL/index files would otherwise stall every startup, and loki +
+    # the collector gate on this completing.
+    command: sh -ec 'for d in /loki /tempo /otelq; do [ "$$(stat -c %u $$d)" = "10001" ] || chown -R 10001:10001 "$$d"; done'
     volumes:
       - loki-data:/loki
       - tempo-data:/tempo

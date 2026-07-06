@@ -57,6 +57,15 @@ prometheus.relabel "infra" {
 		source_labels = ["name"]
 		target_label  = "container"
 	}
+
+	// Stable identity: by default `instance` is this container's hex id, which
+	// changes every recreate — churning EVERY series and breaking alert history
+	// ({{ $labels.instance }} in the disk alerts). Pin it to the VM name; `job`
+	// still separates the unix vs cadvisor exporters.
+	rule {
+		target_label = "instance"
+		replacement  = coalesce(sys.env("VM_NAME"), "central-monitoring")
+	}
 }
 
 prometheus.remote_write "mimir" {

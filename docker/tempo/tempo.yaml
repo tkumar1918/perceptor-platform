@@ -24,7 +24,10 @@ ingester:
       replication_factor: 1
     final_sleep: 0s
   trace_idle_period: 10s
-  max_block_bytes: 1000000
+  # 5m keeps traces flowing to S3 quickly (see docs/data-lifecycle.md). The byte
+  # cap is a backstop for bursts — 1MB (a demo value) would spray tiny blocks
+  # and S3 PUTs under real load; 100MB lets the 5m window govern normally.
+  max_block_bytes: 104857600
   max_block_duration: 5m
 
 compactor:

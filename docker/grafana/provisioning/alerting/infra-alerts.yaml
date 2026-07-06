@@ -87,6 +87,31 @@ groups:
         labels:
           severity: warning
 
+      # ── Self-monitoring agent down — CRITICAL (dead-man's switch) ──
+      # The four rules above use noDataState: OK so a metrics gap doesn't
+      # false-alarm them — but that means a DEAD agent silences all of them.
+      # This rule is the backstop: healthy agent -> count(node_load1) >= 1;
+      # agent dead -> series goes stale (~5m) -> the OR arm yields 0 -> fires.
+      - uid: infra_agent_down
+        title: "Infra self-monitoring agent down (no host metrics)"
+        condition: A
+        for: 5m
+        noDataState: Alerting
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: mimir-infra
+            model:
+              refId: A
+              instant: true
+              expr: (count(node_load1) OR on() vector(0)) < 1
+        annotations:
+          summary: "No host metrics from the infra agent"
+          description: "node_* metrics stopped arriving in _infra — the Alloy agent (or its pipeline to Mimir) is down. Disk/CPU/memory alerts are blind until this recovers."
+        labels:
+          severity: critical
+
       # ── Memory > 80% — WARNING ──
       - uid: infra_memory_high
         title: "Infra memory high (>80%)"
