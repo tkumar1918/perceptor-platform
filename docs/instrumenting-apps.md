@@ -201,7 +201,7 @@ churns them on each deploy/restart. The **Set it to** column is the fix.
 
 | Attribute | Default danger | Set it to |
 |---|---|---|
-| `service.instance.id` | **The OTel agents default this to a random UUID per process start**, and it becomes the metric **`instance`** label in Mimir → a **fresh series-set every restart**. (Logs are safe — the platform keeps this out of the Loki index as structured metadata — so this is now a **metrics** concern, not logs.) | A **stable, per-replica** id: pod name (k8s downward API), host, or `service-1`. `OTEL_SERVICE_INSTANCE_ID=checkout-api-1`. **Not** a single constant shared by all replicas (they'd collide and you couldn't tell them apart). |
+| `service.instance.id` | **The OTel agents default this to a random UUID per process start**, and it becomes the metric **`instance`** label in Mimir → a **fresh series-set every restart**. (Logs are safe — the platform keeps this out of the Loki index as structured metadata — so this is now a **metrics** concern, not logs.) | A **stable, per-replica** id via `OTEL_RESOURCE_ATTRIBUTES` (there is **no** `OTEL_SERVICE_INSTANCE_ID` env var — only `service.name` gets its own): `OTEL_RESOURCE_ATTRIBUTES=…,service.instance.id=checkout-api-1`. Use the pod name (k8s downward API), host, or `service-1` — **not** a single constant shared by all replicas (they'd collide). |
 | `service.version` | New value every deploy → a fresh set of series each release (they age out, but a busy deploy cadence keeps many alive). | Keep it — deploy-correlation is worth it — but use a **clean version** (`1.4.2`), never a build timestamp or full git SHA+time. |
 | `deployment.environment.name` | If templated with a hostname, branch, or build id it stops being a 3-value enum. | A tiny enum: `production` / `staging` / `dev`. Nothing else. |
 | `service.namespace` | A per-instance or per-region value turns a grouping key into cardinality. | A few stable group names (team / bounded context). |
@@ -271,11 +271,11 @@ a churn source — map it back to the tables above and set the proper value.
 ```bash
 # --- identity (resource attributes) ---
 OTEL_SERVICE_NAME=checkout-api
-OTEL_RESOURCE_ATTRIBUTES=service.namespace=shop,service.version=1.4.2,deployment.environment.name=production
-# pin the instance id to a STABLE per-replica value — the agent otherwise defaults
-# it to a random UUID that mints a new metric `instance` series-set every restart
-# (see §8.A; logs are unaffected — the platform keeps it out of the Loki index).
-OTEL_SERVICE_INSTANCE_ID=checkout-api-1        # k8s: use the pod name
+# Pin service.instance.id to a STABLE per-replica value INSIDE OTEL_RESOURCE_ATTRIBUTES
+# (there's no OTEL_SERVICE_INSTANCE_ID env var). Otherwise the agent mints a random
+# UUID → a new metric `instance` series-set every restart. k8s: use the pod name.
+# Logs are unaffected — the platform keeps instance id out of the Loki index.
+OTEL_RESOURCE_ATTRIBUTES=service.namespace=shop,service.version=1.4.2,deployment.environment.name=production,service.instance.id=checkout-api-1
 
 # --- where to send it ---
 OTEL_EXPORTER_OTLP_ENDPOINT=https://<edge-host>:4318
