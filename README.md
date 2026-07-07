@@ -136,10 +136,19 @@ means re-issuing every project's token. To rotate one, delete its line and re-re
 
 ## Managing old data
 
-- **Retention is per project** — `metrics_retention` / `logs_retention` /
-  `traces_retention` in `tenants.yaml` render into each backend's `overrides.yaml`.
-- **Bucket lifecycle** — set S3 lifecycle rules to expire/transition old objects
-  so storage can't silently fill. (On AWS S3 this is native bucket lifecycle.)
+- **Retention is per project, and it's *backend* retention — not an S3 rule.**
+  `metrics_retention` / `logs_retention` / `traces_retention` in `tenants.yaml`
+  render into each backend's `overrides.yaml` (Mimir `compactor_blocks_retention_period`,
+  Loki `retention_period`, Tempo `compaction.block_retention`). Your data lives in
+  S3 the whole time; these tell each backend's **compactor** to delete the aged S3
+  objects **and** their index references together, so queries stay consistent. This
+  is the **primary** retention knob.
+- **S3 lifecycle is a *backstop*, not the retention control.** Set bucket lifecycle
+  rules (native on AWS S3) to sweep truly orphaned objects — failed compactions,
+  aborted multipart uploads — so storage can't silently fill. **Set the lifecycle
+  window *longer* than the backend retention above**, and never rely on it as the
+  primary expiry: if S3 deletes an object a backend still references, queries fail
+  with "block not found." Backend retention deletes cleanly; lifecycle only mops up.
 - **Rate & series caps per project** (`ingestion_rate`, `max_series`) stop one
   noisy project from degrading the others.
 
