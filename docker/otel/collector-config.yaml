@@ -62,6 +62,49 @@ processors:
           - set(attributes["deployment_environment"], resource.attributes["deployment.environment"])
           - set(attributes["deployment_environment"], resource.attributes["deployment.environment.name"])
 
+  # ── LOG NOISE CONTROL (edit the two marked lists) ─────────────────────────
+  # Applied to the LOGS pipeline only. Two independent levers:
+  #   • filter/logs    — BLACKLIST whole log RECORDS (drop them). Add OTTL
+  #                      conditions; a record is dropped if ANY is true.
+  #   • transform/logs — strip heavy ATTRIBUTES that ride on EVERY line (they
+  #                      land in Loki as structured metadata and bloat storage).
+  # This is platform-wide (all tenants). Per-app trimming can also be done in the
+  # app's OTel SDK, but this is the one central knob.
+
+  # DROP whole records. Empty by default (drops nothing). Uncomment / add rules.
+  filter/logs:
+    error_mode: ignore
+    logs:
+      log_record:
+        # --- ADD DROP RULES HERE — record dropped if the expression is true ---
+        # - 'severity_number < SEVERITY_NUMBER_INFO'                         # drop DEBUG/TRACE
+        # - 'IsMatch(body, ".*/actuator/health.*")'                          # health-check spam
+        # - 'instrumentation_scope.name == "org.springframework.security.web.FilterChainProxy"'
+        # - 'resource.attributes["service.name"] == "chatty-service"'        # silence one service
+        - 'false == true'   # harmless no-op placeholder; keep at least one entry
+
+  # STRIP heavy per-line attributes. These SDK/runtime/OS fields are attached to
+  # every log and almost never queried — deleting them here shrinks each line.
+  # Remove a delete_key line to KEEP that attribute; add lines to strip more.
+  transform/logs:
+    error_mode: ignore
+    log_statements:
+      # Resource-level keys stripped with delete_key(resource.attributes, "…").
+      # Per-line keys would use delete_key(log.attributes, "…"), e.g. "thread.id".
+      - statements:
+          - delete_key(resource.attributes, "process.command_args")
+          - delete_key(resource.attributes, "process.executable.path")
+          - delete_key(resource.attributes, "process.runtime.description")
+          - delete_key(resource.attributes, "os.description")
+          - delete_key(resource.attributes, "os.type")
+          - delete_key(resource.attributes, "host.arch")
+          - delete_key(resource.attributes, "telemetry.distro.name")
+          - delete_key(resource.attributes, "telemetry.distro.version")
+          - delete_key(resource.attributes, "telemetry.sdk.language")
+          - delete_key(resource.attributes, "telemetry.sdk.name")
+          - delete_key(resource.attributes, "telemetry.sdk.version")
+          # --- ADD MORE KEYS TO STRIP HERE (resource.attributes or log.attributes) ---
+
 exporters:
   prometheusremotewrite:
     endpoint: http://mimir:9009/api/v1/push
@@ -99,7 +142,7 @@ service:
       exporters: [prometheusremotewrite]
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, filter/logs, transform/logs, batch]
       exporters: [otlphttp/loki]
     traces:
       receivers: [otlp]
