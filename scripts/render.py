@@ -105,11 +105,12 @@ def write(path, content):
 def ensure_tokens(tenants):
     """Attach each tenant's ingest token, generating any that are missing.
 
-    Tokens live in tenants.secrets.yaml (gitignored), NOT tenants.yaml, so the
-    config file stays safe to commit. Generation is idempotent: an existing
-    token is reused forever — silently rotating it would 401 every app already
-    exporting with it. Only tenants without a token get a fresh one. To rotate
-    deliberately, delete that tenant's line in the secrets file and re-render.
+    Tokens live in tenants.secrets.yaml, kept separate from tenants.yaml so the
+    project list never carries secrets (both are per-instance/gitignored anyway).
+    Generation is idempotent: an existing token is reused forever — silently
+    rotating it would 401 every app already exporting with it. Only tenants without
+    a token get a fresh one. To rotate deliberately, delete that tenant's line in
+    the secrets file and re-render.
     """
     store = {}
     if os.path.exists(SECRETS_FILE):

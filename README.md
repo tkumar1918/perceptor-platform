@@ -89,6 +89,31 @@ That's the whole flow. No hand-editing of six config files.
 > allocate the same numbers deterministically; you don't set it, and anything
 > invalid/taken is healed to the next free number. `display_name` must be unique.
 
+## Removing a project
+
+`make delete-tenant TENANT=<id>` — the inverse of onboarding, and a **full**
+teardown. (Just deleting the entry from `tenants.yaml` is only a *soft stop*: it
+cuts ingest but orphans the Grafana org, the stored data, and stale files.) It:
+
+- removes the block from `tenants.yaml` + its token from `tenants.secrets.yaml`,
+  re-renders, and drops the orphaned `bootstrap/<id>.ndjson`;
+- **deletes the tenant's Grafana org** (resolved by name) and its datasources;
+- restarts caddy so ingest stops immediately.
+
+The `org_id` stays in `tenants.lock.yaml` as a reserved **tombstone** (never
+reused; re-adding the same id later gets the same number back). By default the
+tenant's **stored data is left to age out** under its retention (30d default).
+
+```bash
+make delete-tenant TENANT=project-beta               # teardown; data expires via retention
+make delete-tenant TENANT=project-beta PURGE_DATA=1  # + irreversibly purge its S3 data now
+```
+
+`PURGE_DATA=1` also deletes the tenant's objects from all three buckets (Mimir/
+Tempo prefixes, Loki chunks **and** its `index/*/<id>/`), and asks you to type the
+tenant id to confirm. `YES=1` skips prompts (automation). Reserved tenants
+(`_infra`) are refused.
+
 ---
 
 ## Monitoring the infrastructure
@@ -137,9 +162,9 @@ verified end-to-end (auth gate → write routing → storage → Grafana read pa
 ## Security note on tokens
 
 Project ingest tokens are auto-generated (one per tenant) into
-`tenants.secrets.yaml` and rendered into the Caddyfile. **That file is the secret —
-it's gitignored;** `tenants.yaml` itself is now safe to commit. Generation is
-idempotent (an existing token is never silently rotated). Back up
+`tenants.secrets.yaml` and rendered into the Caddyfile — **both gitignored**, as is
+`tenants.yaml` itself (all per-instance, not shared — see [Layout](#layout)).
+Generation is idempotent (an existing token is never silently rotated). Back up
 `tenants.secrets.yaml` or source it from a secrets manager / SOPS-age — losing it
 means re-issuing every project's token. To rotate one, delete its line and re-render.
 
@@ -187,10 +212,13 @@ means re-issuing every project's token. To rotate one, delete its line and re-re
 ## Layout
 
 ```
-tenants.yaml                source of truth (the only file you normally edit)
+tenants.example.yaml        committed template — copy to tenants.yaml on a new instance
+tenants.yaml                your project list, the file you edit (gitignored, per-instance)
 tenants.secrets.yaml        (generated, gitignored) one ingest token per tenant
+tenants.lock.yaml           (generated, gitignored) one stable Grafana org_id per tenant
 scripts/render.py           renders everything below from tenants.yaml
-scripts/grafana-bootstrap.sh creates Grafana orgs via API
+scripts/grafana-bootstrap.sh creates Grafana orgs via API (resolved by name)
+scripts/delete-tenant.sh    full tenant teardown (make delete-tenant)
 docker/
   docker-compose.yml
   caddy/Caddyfile           (generated) token -> tenant
