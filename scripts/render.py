@@ -48,7 +48,7 @@ def load():
     with open(path) as f:
         cfg = yaml.safe_load(f)
     defaults = cfg.get("defaults", {})
-    tenants = cfg["tenants"]
+    tenants = cfg.get("tenants") or []       # tolerate an emptied list (last tenant deleted)
     reserved = cfg.get("reserved", []) or []
 
     # org_id is NO LONGER required or validated here — ensure_org_ids() allocates
@@ -175,8 +175,22 @@ def ensure_org_ids(tenants):
         return n
 
     healed, assigned = [], {}
+    # Phase 1: every current tenant already in the lock keeps its number. Reserve
+    # these FIRST — so adding/reordering a tenant can never steal an existing one's
+    # number (allocation is order-independent for anyone already allocated).
     for t in tenants:
         tid = t["id"]
+        n = ledger.get(tid)
+        if isinstance(n, int) and n >= 2 and n not in used:
+            assigned[tid] = n
+            used.add(n)
+    # Phase 2: tenants with no locked number yet — honor a valid yaml hint, else
+    # heal to the next free number. (A corrupt lock with duplicate numbers lands
+    # here for the loser and gets healed too.)
+    for t in tenants:
+        tid = t["id"]
+        if tid in assigned:
+            continue
         candidate = ledger.get(tid, t.get("org_id"))   # lock wins, else yaml hint
         if isinstance(candidate, int) and candidate >= 2 and candidate not in used:
             org_id = candidate
@@ -186,7 +200,8 @@ def ensure_org_ids(tenants):
                 healed.append((tid, candidate, org_id))
         used.add(org_id)
         assigned[tid] = org_id
-        t["org_id"] = org_id
+    for t in tenants:
+        t["org_id"] = assigned[t["id"]]
 
     new_ledger = {**tombstones, **assigned}
     with open(LOCK_FILE, "w") as f:
