@@ -1,25 +1,31 @@
 # ============================================================================
+# TEMPLATE — copy me to tenants.yaml, then edit for THIS deployment:
+#
+#     cp tenants.example.yaml tenants.yaml
+#
+# tenants.yaml is GITIGNORED (per-instance): it holds YOUR real project list, so
+# it's never shared/committed — every deployment runs its own projects. This
+# committed example only documents the shape. Same pattern as .env / .env.example.
+# ----------------------------------------------------------------------------
+#
 # SOURCE OF TRUTH for every project (tenant) on the platform.
 #
-# Adding a project = add an entry here + run `make render` + `make reload`.
-# `make render` regenerates:
+# Adding a project = add an entry here (just a unique `id` + `display_name`) then
+# run `make render` + `make reload`. `make render` regenerates:
 #   - docker/caddy/Caddyfile               (token -> tenant map)
 #   - docker/mimir/overrides.yaml          (per-tenant metric retention/limits)
 #   - docker/loki/overrides.yaml           (per-tenant log retention/limits)
 #   - docker/tempo/overrides.yaml          (per-tenant trace retention)
-#   - docker/grafana/bootstrap/<id>.ndjson  (per-org datasource payloads, API-applied)
+#   - docker/grafana/bootstrap/<id>.ndjson (per-org datasource payloads, API-applied)
 #
-# `org_id` MUST be unique and stable. Org 1 is reserved for the platform admin.
-# Never reuse or renumber an org_id once a project is live.
+# You do NOT set `org_id`. `make render` allocates a Grafana org_id per tenant into
+# tenants.lock.yaml (gitignored, per-instance) and reuses it forever — org 1 is the
+# platform admin. Anything you do write is only a hint; invalid/taken values are
+# healed to the next free number. `display_name` must be unique (orgs are bound by
+# name at bootstrap, not by number).
 #
-# `reserved:` (below) holds PLATFORM tenants, not projects — e.g. `_infra`, which
-# holds the stack's own host/container/system telemetry. They get a token +
-# retention/limits like any tenant, but NO Grafana org of their own: their data
-# is read from the admin org (org 1) via a file-provisioned datasource.
-#
-# Ingest TOKENS are not set here. `make render` auto-generates one per tenant
-# into tenants.secrets.yaml (gitignored) and reuses it forever; to rotate, delete
-# that tenant's line there and re-render. This keeps tenants.yaml safe to commit.
+# Ingest TOKENS are not set here either. `make render` auto-generates one per tenant
+# into tenants.secrets.yaml (gitignored) and reuses it forever.
 # ============================================================================
 
 defaults:
@@ -34,25 +40,13 @@ defaults:
   traces_burst_bytes: 25000000
 
 tenants:
-  - id: project-alpha              # == X-Scope-OrgID. lowercase, no spaces.
-    org_id: 2
-    metrics_retention: 90d
-    logs_retention: 2160h          # 90d
-    traces_retention: 2160h        # 90d
-    ingestion_rate: 50000
-    max_series: 500000
-    display_name: "Project Alpha"
+  # Minimal tenant — inherits every default above.
+  - id: example-service            # == X-Scope-OrgID. lowercase, no spaces.
+    display_name: "Example Service"
 
-  - id: project-beta
-    display_name: "Project Beta"
-    org_id: 3
-    metrics_retention: 90d
-    logs_retention: 2160h          # 90d
-    traces_retention: 2160h        # 90d
-
-  - id: project-tutor
-    display_name: "Tutor Service"
-    org_id: 4
+  # Tenant that overrides some defaults (longer retention, higher limits).
+  - id: another-service
+    display_name: "Another Service"
     metrics_retention: 90d
     logs_retention: 2160h          # 90d
     traces_retention: 2160h        # 90d
@@ -61,7 +55,7 @@ tenants:
 
 # ============================================================================
 # RESERVED platform tenants (not projects — no dedicated Grafana org).
-# id MUST start with "_". Read from the admin org (org 1).
+# id MUST start with "_". Read from the admin org (org 1). Keep _infra.
 # ============================================================================
 reserved:
   - id: _infra                     # platform self-monitoring: the stack's own

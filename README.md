@@ -20,19 +20,22 @@ forwards it; Mimir/Loki/Tempo store data under it; and each project's Grafana
 **org** has datasources pinned to it. A project can neither write as, nor read,
 another project's data.
 
-The single source of truth is [tenants.yaml](tenants.yaml). Everything per-tenant
-(Caddy tokens, backend retention/limits, Grafana datasources/orgs) is **rendered**
-from it by `make render`.
+The single source of truth is `tenants.yaml` — your deployment's project list.
+It's **gitignored** (per-instance, like `.env`); the repo ships
+[tenants.example.yaml](tenants.example.yaml) as the template to copy. Everything
+per-tenant (Caddy tokens, backend retention/limits, Grafana datasources/orgs) is
+**rendered** from it by `make render`.
 
 ---
 
 ## Quick start
 
 ```bash
-cp .env.example .env          # set storage (S3) + Grafana secrets
-make render                   # generate per-tenant config + ingest tokens (tenants.secrets.yaml)
-make up                       # start the stack
-make bootstrap-orgs           # create one Grafana org per project (first run only)
+cp .env.example .env                    # set storage (S3) + Grafana secrets
+cp tenants.example.yaml tenants.yaml    # your project list (gitignored, per-instance)
+make render                             # generate per-tenant config + tokens (tenants.secrets.yaml)
+make up                                 # start the stack
+make bootstrap-orgs                     # create one Grafana org per project (first run only)
 ```
 
 Then:
@@ -63,9 +66,10 @@ A request with no/invalid token gets `401` at Caddy and never reaches the stack.
 
 ## Onboarding a new project
 
-1. Add an entry to [tenants.yaml](tenants.yaml) (unique `id`, next free `org_id`,
-   optional retention/limits). No token needed — `make render` generates one into
-   `tenants.secrets.yaml` and prints it once.
+1. Add an entry to [tenants.yaml](tenants.yaml) — just a unique `id` and
+   `display_name` (plus optional retention/limits). No token, **no `org_id`** —
+   `make render` generates the token into `tenants.secrets.yaml` and allocates a
+   stable `org_id` into `tenants.lock.yaml`, both reused forever.
 2. `make reload` — re-renders and restarts the edge + backends.
 3. `make bootstrap-orgs` — creates its Grafana org **and** its three
    tenant-pinned datasources via the API (idempotent; no-op for existing ones).
@@ -73,12 +77,17 @@ A request with no/invalid token gets `401` at Caddy and never reaches the stack.
 > Grafana orgs/datasources are created via the API, not file provisioning:
 > Grafana hard-fails at boot if provisioning names an org that doesn't exist yet,
 > and orgs can only be created after it's running. `bootstrap-orgs` resolves that
-> ordering. Org IDs are positional, so create them in `tenants.yaml` order.
+> ordering. It looks each org up **by name** and uses whatever id Grafana assigns,
+> so a gap or drift in the allocated `org_id` never breaks it.
 
 That's the whole flow. No hand-editing of six config files.
 
-> **`org_id` is forever.** It must be unique, sequential from 2, and never
-> reused or renumbered once a project is live — Grafana org IDs are positional.
+> **`org_id` is auto-managed, per-instance.** `make render` allocates one per
+> tenant into `tenants.lock.yaml` — **gitignored**, because each deployment has its
+> own Grafana with its own org ids (orgs are bound by *name* at bootstrap, so the
+> number is just a local label). Two fresh instances with the same `tenants.yaml`
+> allocate the same numbers deterministically; you don't set it, and anything
+> invalid/taken is healed to the next free number. `display_name` must be unique.
 
 ---
 
