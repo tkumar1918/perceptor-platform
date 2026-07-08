@@ -48,20 +48,28 @@ done
 while IFS='|' read -r org_id id display_name; do
   [[ -z "$id" ]] && continue
 
-  # 1) Resolve the org BY NAME, capturing the real id Grafana assigned (create if
-  #    absent). We never assume Grafana's number matches org_id from the lock —
-  #    so a gap or drift in the allocated id can't break provisioning.
-  real_id=$(curl "${auth[@]}" "${GRAFANA_URL}/api/orgs" \
-    | python3 -c 'import json,sys; n=sys.argv[1]; print(next((o["id"] for o in json.load(sys.stdin) if o.get("name")==n), ""))' \
-      "$display_name")
-  if [[ -z "$real_id" ]]; then
-    real_id=$(curl "${auth[@]}" -H 'Content-Type: application/json' \
-      -d "{\"name\":\"${display_name}\"}" "${GRAFANA_URL}/api/orgs" \
+  # 1) Resolve the org BY NAME, capturing the real id Grafana assigned (create on
+  #    404). We never assume Grafana's number matches org_id from the lock — so a
+  #    gap or drift in the allocated id can't break provisioning. Exact single
+  #    lookup (GET /api/orgs/name/:name), so no listing / 1000-org pagination cap.
+  #    Name is URL-encoded for the path; the create body is built with json.dumps
+  #    so quotes/backslashes in a display_name can't corrupt the JSON.
+  enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$display_name")
+  resp=$(curl -sS -u "${ADMIN_USER}:${ADMIN_PASS}" -w $'\n%{http_code}' \
+    "${GRAFANA_URL}/api/orgs/name/${enc}")
+  code=${resp##*$'\n'}; body=${resp%$'\n'*}
+  if [[ "$code" == 200 ]]; then
+    real_id=$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))')
+    echo "org '${display_name}' exists -> grafana id ${real_id} (${id})"
+  elif [[ "$code" == 404 ]]; then
+    payload=$(python3 -c 'import json,sys; print(json.dumps({"name": sys.argv[1]}))' "$display_name")
+    real_id=$(curl "${auth[@]}" -H 'Content-Type: application/json' -d "$payload" \
+      "${GRAFANA_URL}/api/orgs" \
       | python3 -c 'import json,sys; print(json.load(sys.stdin).get("orgId",""))')
     [[ -z "$real_id" ]] && { echo "ERROR: could not create org '${display_name}'"; exit 1; }
     echo "created org '${display_name}' -> grafana id ${real_id} (${id}, lock org_id ${org_id})"
   else
-    echo "org '${display_name}' exists -> grafana id ${real_id} (${id})"
+    echo "ERROR: unexpected HTTP ${code} resolving org '${display_name}'"; exit 1
   fi
 
   # 2) Add admin to the org (creating an org doesn't auto-add the creator),

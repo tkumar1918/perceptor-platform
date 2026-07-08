@@ -62,6 +62,9 @@ def load():
         if t["id"] in seen_ids:
             sys.exit(f"duplicate tenant id: {t['id']}")
         name = t.get("display_name", t["id"])
+        if "\n" in name or "\r" in name:
+            sys.exit(f"display_name for '{t['id']}' must be a single line — it's "
+                     "written one-per-line to scripts/.orgs. (Quotes, |, etc. are fine.)")
         if name in seen_names:
             sys.exit(f"duplicate display_name '{name}' — org names must be unique "
                      "(grafana-bootstrap.sh resolves each org by name)")
