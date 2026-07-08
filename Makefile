@@ -4,7 +4,7 @@ PY      := .venv/bin/python
 PIP     := .venv/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help venv render up down reload bootstrap-orgs logs ps fmt-check
+.PHONY: help venv render up down reload bootstrap-orgs delete-tenant logs ps fmt-check
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -30,6 +30,10 @@ reload: render ## Re-render config, apply compose changes (new services), and re
 
 bootstrap-orgs: ## Create each project's Grafana org + tenant-pinned datasources (idempotent)
 	@set -a; . ./.env; set +a; bash scripts/grafana-bootstrap.sh
+
+delete-tenant: venv ## Fully remove a tenant: config + Grafana org + stale files (TENANT=<id>; PURGE_DATA=1 also wipes its S3 data)
+	@test -n "$(TENANT)" || { echo "usage: make delete-tenant TENANT=<id> [PURGE_DATA=1] [YES=1]"; exit 1; }
+	@set -a; . ./.env; set +a; PURGE_DATA="$(PURGE_DATA)" YES="$(YES)" bash scripts/delete-tenant.sh "$(TENANT)"
 
 logs: ## Tail logs for all services
 	@$(COMPOSE) logs -f --tail=100
