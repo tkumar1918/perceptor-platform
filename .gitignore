@@ -27,3 +27,6 @@ tenants.lock.yaml
 
 # os
 .DS_Store
+
+# of no use
+temp/
