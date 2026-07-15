@@ -1,0 +1,134 @@
+{
+  "uid": "perceptor-app-red",
+  "id": null,
+  "title": "Application — RED (rate, errors, duration)",
+  "tags": ["perceptor", "app"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "description": "Requires no app metrics work: Tempo's metrics-generator auto-derives these from every project's TRACES (span_kind, status_code, service — see docs/instrumenting-apps.md §7), so this works for any project the moment it sends properly-instrumented spans. Server-side (inbound) calls only. Project org only — this is app data, never imported into the admin org.",
+  "templating": {
+    "list": [
+      {
+        "name": "mimir",
+        "label": "Metrics source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${mimir}" },
+        "query": "label_values(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\"}, service)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "environment",
+        "label": "Environment",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${mimir}" },
+        "query": "label_values(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\"}, deployment_environment)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    { "type": "row", "title": "Overview", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false, "id": 100 },
+
+    {
+      "type": "stat", "title": "Request rate", "id": 1,
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "sum(rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m]))", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+    {
+      "type": "stat", "title": "Error rate", "id": 2,
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "100 * sum(rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", status_code=\"STATUS_CODE_ERROR\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m])) / sum(rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m]))", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "type": "stat", "title": "p95 latency", "id": 3,
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(traces_spanmetrics_latency_bucket{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m])))", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+
+    { "type": "row", "title": "By service", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }, "collapsed": false, "id": 101 },
+
+    {
+      "type": "timeseries", "title": "Request rate by service", "id": 10,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "sum by (service) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m]))", "legendFormat": "{{service}}" } ],
+      "fieldConfig": { "defaults": { "unit": "reqps", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "Error rate % by service", "id": 11,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "100 * sum by (service) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", status_code=\"STATUS_CODE_ERROR\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m])) / sum by (service) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m]))", "legendFormat": "{{service}}" } ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "Latency by service (p50 / p95 / p99)", "id": 12,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le, service) (rate(traces_spanmetrics_latency_bucket{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m])))", "legendFormat": "{{service}} p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le, service) (rate(traces_spanmetrics_latency_bucket{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m])))", "legendFormat": "{{service}} p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le, service) (rate(traces_spanmetrics_latency_bucket{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m])))", "legendFormat": "{{service}} p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+
+    { "type": "row", "title": "By route (span name)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }, "collapsed": false, "id": 102 },
+
+    {
+      "type": "table", "title": "Routes — slowest first (p99)", "id": 20,
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (service, span_name) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m]))", "instant": true, "format": "table" },
+        { "refId": "B", "expr": "100 * sum by (service, span_name) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", status_code=\"STATUS_CODE_ERROR\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m])) / sum by (service, span_name) (rate(traces_spanmetrics_calls_total{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m]))", "instant": true, "format": "table" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le, service, span_name) (rate(traces_spanmetrics_latency_bucket{span_kind=\"SPAN_KIND_SERVER\", service=~\"$service\", deployment_environment=~\"$environment\"}[5m])))", "instant": true, "format": "table" }
+      ],
+      "transformations": [
+        { "id": "merge", "options": {} },
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true },
+          "renameByName": { "service": "Service", "span_name": "Route", "Value #A": "req/s", "Value #B": "error %", "Value #C": "p99 (s)" }
+        } },
+        { "id": "sortBy", "options": { "fields": {}, "sort": [ { "field": "p99 (s)", "desc": true } ] } }
+      ],
+      "options": { "showHeader": true }
+    }
+  ]
+}

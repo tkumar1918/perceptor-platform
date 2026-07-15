@@ -1,0 +1,108 @@
+{
+  "uid": "perceptor-infra-docker",
+  "id": null,
+  "title": "Infrastructure — Docker containers",
+  "tags": ["perceptor", "infra"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "description": "Per-container CPU/memory (cadvisor) and per-container logs (docker), narrowed to one container with the $container variable. Works in ANY org: pick the Mimir/Loki datasource for the tenant you're viewing.",
+  "templating": {
+    "list": [
+      {
+        "name": "mimir",
+        "label": "Metrics source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "loki",
+        "label": "Logs source",
+        "type": "datasource",
+        "query": "loki",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "vm",
+        "label": "VM",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${mimir}" },
+        "query": "label_values(node_uname_info, vm)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${mimir}" },
+        "query": "label_values(container_last_seen{vm=~\"$vm\", container!=\"\"}, container)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    { "type": "row", "title": "Containers (cadvisor)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false, "id": 100 },
+
+    {
+      "type": "stat", "title": "Containers reporting", "id": 1,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "count(count by (container) (container_last_seen{vm=~\"$vm\", container=~\"$container\"}))", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+    {
+      "type": "timeseries", "title": "Container CPU (cores)", "id": 10,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "sum by (vm, container) (rate(container_cpu_usage_seconds_total{vm=~\"$vm\", container=~\"$container\"}[5m]))", "legendFormat": "{{vm}} / {{container}}" } ],
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "Container memory (working set)", "id": 11,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "sum by (vm, container) (container_memory_working_set_bytes{vm=~\"$vm\", container=~\"$container\"})", "legendFormat": "{{vm}} / {{container}}" } ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "table", "title": "Running containers (last seen ≤ 2m)", "id": 12,
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "count by (vm, container) (time() - container_last_seen{vm=~\"$vm\", container=~\"$container\"} < 120)", "instant": true, "format": "table" } ],
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true }, "renameByName": { "vm": "VM", "container": "Container" } } } ],
+      "options": { "showHeader": true }
+    },
+
+    { "type": "row", "title": "Container logs", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 }, "collapsed": false, "id": 101 },
+
+    {
+      "type": "logs", "title": "Container logs (job=docker, opted-in containers only)", "id": 20,
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 22 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [ { "refId": "A", "expr": "{telemetry_source=\"infra\", vm=~\"$vm\", job=\"docker\", container=~\"$container\"}" } ],
+      "options": { "showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" }
+    }
+  ]
+}

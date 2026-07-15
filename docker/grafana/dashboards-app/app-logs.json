@@ -1,0 +1,125 @@
+{
+  "uid": "perceptor-app-logs",
+  "id": null,
+  "title": "Application — Logs",
+  "tags": ["perceptor", "app"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "description": "The project's own application logs (Loki service_name streams) — level breakdown, counts, and a searchable log view. This is app data, not infra: it excludes telemetry_source=infra (host/container/nginx infra logs live on the Infrastructure dashboards). Project org only.",
+  "templating": {
+    "list": [
+      {
+        "name": "loki",
+        "label": "Logs source",
+        "type": "datasource",
+        "query": "loki",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "${loki}" },
+        "query": "label_values(service_name)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "level",
+        "label": "Level",
+        "type": "custom",
+        "query": "info,warn,error,debug,trace,fatal",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "search",
+        "label": "Search (URL / text)",
+        "type": "textbox",
+        "query": "",
+        "current": { "text": "", "value": "" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Log lines",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" }, "expr": "sum(count_over_time({service_name=~\"$service\", telemetry_source!=\"infra\"} |= `$search` | detected_level=~\"$level\" [$__range]))", "queryType": "instant" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" }, "noValue": "0" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Errors",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" }, "expr": "sum(count_over_time({service_name=~\"$service\", telemetry_source!=\"infra\"} |= `$search` | detected_level=~\"error|fatal\" [$__range]))", "queryType": "instant" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] }, "noValue": "0" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Warnings",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" }, "expr": "sum(count_over_time({service_name=~\"$service\", telemetry_source!=\"infra\"} |= `$search` | detected_level=~\"warn\" [$__range]))", "queryType": "instant" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] }, "noValue": "0" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Log volume by level",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" }, "expr": "sum by (detected_level) (count_over_time({service_name=~\"$service\", telemetry_source!=\"infra\"} |= `$search` | detected_level=~\"$level\" [$__auto]))", "legendFormat": "{{detected_level}}" }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "fieldConfig": {
+        "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } }, "color": { "mode": "palette-classic" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "warn" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byName", "options": "info" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Logs — click any line to see structured metadata (trace_id, route, status, ...)",
+      "gridPos": { "h": 18, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "loki", "uid": "${loki}" }, "expr": "{service_name=~\"$service\", telemetry_source!=\"infra\"} |= `$search` | detected_level=~\"$level\"", "maxLines": 500 }
+      ],
+      "options": { "showTime": true, "showLabels": false, "showCommonLabels": false, "wrapLogMessage": false, "prettifyLogMessage": false, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" }
+    }
+  ]
+}

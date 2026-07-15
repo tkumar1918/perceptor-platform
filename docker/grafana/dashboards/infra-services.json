@@ -1,7 +1,7 @@
 {
-  "uid": "perceptor-infra",
+  "uid": "perceptor-infra-services",
   "id": null,
-  "title": "Infrastructure — hosts & containers",
+  "title": "Infrastructure — Host & running services",
   "tags": ["perceptor", "infra"],
   "timezone": "browser",
   "schemaVersion": 39,
@@ -10,7 +10,7 @@
   "graphTooltip": 1,
   "refresh": "30s",
   "time": { "from": "now-6h", "to": "now" },
-  "description": "Portable infra dashboard. Works in ANY org: pick the Mimir/Loki datasource for the tenant you're viewing. Driven by the agent's node-exporter + cadvisor metrics (labelled telemetry_source=infra, vm, container).",
+  "description": "Host vitals (CPU/RAM/disk/net), systemd unit health, and host/system logs — what's running on the box and whether it's healthy. Container-specific views live on Infrastructure — Docker containers; nginx on Infrastructure — Nginx. Works in ANY org: pick the Mimir/Loki datasource for the tenant you're viewing.",
   "templating": {
     "list": [
       {
@@ -142,40 +142,32 @@
       "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean"] }, "tooltip": { "mode": "multi" } }
     },
 
-    { "type": "row", "title": "Containers (cadvisor)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }, "collapsed": false, "id": 103 },
+    { "type": "row", "title": "systemd units (needs the systemd collector)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }, "collapsed": false, "id": 103 },
 
     {
-      "type": "timeseries", "title": "Container CPU (cores)", "id": 30,
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 32 },
+      "type": "stat", "title": "Failed units", "id": 30,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{vm=~\"$vm\", container!=\"\"}[5m]))", "legendFormat": "{{container}}" } ],
-      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+      "targets": [ { "refId": "A", "expr": "count(node_systemd_unit_state{vm=~\"$vm\", state=\"failed\"} == 1) OR on() vector(0)", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
     },
     {
-      "type": "timeseries", "title": "Container memory (working set)", "id": 31,
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 32 },
+      "type": "table", "title": "Units not active (failed / activating / deactivating)", "id": 31,
+      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "sum by (container) (container_memory_working_set_bytes{vm=~\"$vm\", container!=\"\"})", "legendFormat": "{{container}}" } ],
-      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
-    },
-    {
-      "type": "table", "title": "Running containers (last seen ≤ 2m)", "id": 32,
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 41 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "count by (vm, container) (time() - container_last_seen{vm=~\"$vm\", container!=\"\"} < 120)", "instant": true, "format": "table" } ],
-      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true }, "renameByName": { "vm": "VM", "container": "Container" } } } ],
+      "targets": [ { "refId": "A", "expr": "node_systemd_unit_state{vm=~\"$vm\", state=~\"failed|activating|deactivating\"} == 1", "instant": true, "format": "table" } ],
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true }, "renameByName": { "vm": "VM", "name": "Unit", "state": "State" } } } ],
       "options": { "showHeader": true }
     },
 
-    { "type": "row", "title": "Infra logs", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 49 }, "collapsed": false, "id": 104 },
+    { "type": "row", "title": "Host + system logs", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 }, "collapsed": false, "id": 104 },
 
     {
-      "type": "logs", "title": "Host + container logs (telemetry_source=infra)", "id": 40,
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 50 },
+      "type": "logs", "title": "Host logs (job=systemd-journal)", "id": 40,
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 41 },
       "datasource": { "type": "loki", "uid": "${loki}" },
-      "targets": [ { "refId": "A", "expr": "{telemetry_source=\"infra\", vm=~\"$vm\"}" } ],
+      "targets": [ { "refId": "A", "expr": "{telemetry_source=\"infra\", vm=~\"$vm\", job=\"systemd-journal\"}" } ],
       "options": { "showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" }
     }
   ]

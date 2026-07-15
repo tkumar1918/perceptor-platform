@@ -1,0 +1,87 @@
+{
+  "uid": "perceptor-infra-nginx",
+  "id": null,
+  "title": "Infrastructure — Nginx (host service)",
+  "tags": ["perceptor", "infra"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "description": "For nginx running as a HOST service (not containerized): its systemd unit state + tailed access/error logs. A containerized nginx doesn't show here — it's opt-in on the Infrastructure — Docker containers dashboard instead (label perceptor.enable=true on its own compose). Works in ANY org: pick the Mimir/Loki datasource for the tenant you're viewing.",
+  "templating": {
+    "list": [
+      {
+        "name": "mimir",
+        "label": "Metrics source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "loki",
+        "label": "Logs source",
+        "type": "datasource",
+        "query": "loki",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "vm",
+        "label": "VM",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${mimir}" },
+        "query": "label_values(node_uname_info, vm)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    { "type": "row", "title": "nginx.service status", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false, "id": 100 },
+
+    {
+      "type": "table", "title": "nginx.service state (per VM, needs the systemd collector)", "id": 1,
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "node_systemd_unit_state{vm=~\"$vm\", name=\"nginx.service\"} == 1", "instant": true, "format": "table" } ],
+      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true, "name": true }, "renameByName": { "vm": "VM", "state": "State" } } } ],
+      "fieldConfig": {
+        "defaults": { "custom": { "cellOptions": { "type": "color-text" } } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "State" },
+            "properties": [
+              { "id": "mappings", "value": [
+                { "type": "value", "options": { "active":   { "color": "green", "index": 0 } } },
+                { "type": "value", "options": { "failed":   { "color": "red",   "index": 1 } } },
+                { "type": "value", "options": { "inactive": { "color": "yellow","index": 2 } } }
+              ] },
+              { "id": "custom.cellOptions", "value": { "type": "color-text" } }
+            ]
+          }
+        ]
+      },
+      "options": { "showHeader": true }
+    },
+
+    { "type": "row", "title": "nginx logs", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }, "collapsed": false, "id": 101 },
+
+    {
+      "type": "logs", "title": "nginx access/error logs (job=nginx)", "id": 10,
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [ { "refId": "A", "expr": "{telemetry_source=\"infra\", vm=~\"$vm\", job=\"nginx\"}" } ],
+      "options": { "showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" }
+    }
+  ]
+}

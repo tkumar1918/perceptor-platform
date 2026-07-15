@@ -143,15 +143,35 @@ project's tenant being polluted by another's data. Which token the agent uses is
 the agent repo's one real deploy decision — see *Which token does this VM use?*
 there.
 
-A shared **"Infrastructure — hosts & containers"** dashboard ships with the stack
-([docker/grafana/dashboards/infra.json](docker/grafana/dashboards/infra.json)) —
-host CPU/mem/disk/net, per-container CPU/mem, and infra logs. Because infra
-telemetry is identical everywhere, **one dashboard works for every tenant**: it's
-auto-provisioned into the admin org (reading `_infra`) and imported into each
-project org by `make bootstrap-orgs`, where its datasource variables bind to that
-project's own Mimir/Loki. Pick your `vm` from the dropdown. (Projects in a
-`group` get a variant pinned to the shared infra datasources instead, so it shows
-the shared box rather than their own — otherwise empty — infra namespace.)
+Three infra dashboards ship with the stack
+([docker/grafana/dashboards/](docker/grafana/dashboards/)), split by concern
+instead of one monolith:
+
+| Dashboard | Covers |
+|---|---|
+| **Infrastructure — Host & running services** | Fleet CPU/mem/disk/net, systemd unit health (needs the agent's `systemd` collector), host/journald logs |
+| **Infrastructure — Docker containers** | Per-container CPU/mem (cadvisor) and per-container logs, both filterable down to one `container` |
+| **Infrastructure — Nginx (host service)** | nginx.service unit state + tailed access/error logs, for nginx running as a host service (not containerized) |
+
+Because infra telemetry is identical everywhere, **the same three dashboards work
+for every tenant**: each is auto-provisioned into the admin org (reading
+`_infra`) and imported into every project org by `make bootstrap-orgs`, where its
+datasource variables bind to that project's own Mimir/Loki. Pick your `vm` from
+the dropdown. (Projects in a `group` get a variant pinned to the shared infra
+datasources instead, so they show the shared box rather than their own —
+otherwise empty — infra namespace.) A dashboard's panels are simply empty on a
+tenant whose agent doesn't collect that signal (e.g. no nginx host service, or an
+older agent without the systemd collector) — nothing to configure per-tenant.
+
+A fourth dashboard, **Application — RED (rate, errors, duration)**
+([docker/grafana/dashboards-app/app-red.json](docker/grafana/dashboards-app/app-red.json)),
+is different in kind: it's app data, not infra, so it's imported into every
+**project** org only (never the admin org, never group-pinned — app traces stay
+in the project's own tenant regardless of infra grouping). It needs **no extra
+app-side work**: Tempo's metrics-generator auto-derives request rate, error rate,
+and latency from any project's traces the moment spans carry proper
+`span.kind`/`status` (see [docs/instrumenting-apps.md](docs/instrumenting-apps.md) §7)
+— the same semantic-convention discipline the platform already asks for.
 
 ---
 
@@ -240,5 +260,8 @@ docker/
   tempo/{tempo,overrides}.yaml
   grafana/bootstrap/         (generated) per-org datasource payloads, API-applied
   grafana/provisioning/...   dashboards provider (admin org 1)
-  grafana/dashboards/        drop shared dashboard JSON here
+  grafana/dashboards/        infra dashboards — file-provisioned into admin org 1,
+                              API-imported into every project org (bootstrap-orgs)
+  grafana/dashboards-app/    app dashboards — API-imported into project orgs only,
+                              never admin org (not infra, not group-pinned)
 ```

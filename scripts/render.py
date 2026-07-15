@@ -515,7 +515,7 @@ providers:
 
 def render_orgs(tenants):
     # consumed by grafana-bootstrap.sh (org_id|id|group|display_name).
-    # group (empty if unset) picks the infra-dashboard variant per org there.
+    # group (empty if unset) picks the infra-dashboard variants per org there.
     # display_name stays LAST: it's the only field allowed to contain '|'
     # (bootstrap's `read` folds the rest of the line into the final variable).
     path = os.path.join(ROOT, "scripts", ".orgs")

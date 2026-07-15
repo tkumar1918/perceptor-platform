@@ -24,31 +24,40 @@ ADMIN_PASS="${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ORGS_FILE="$HERE/.orgs"
 BOOTSTRAP_DIR="$HERE/../docker/grafana/bootstrap"
-DASH_FILE="$HERE/../docker/grafana/dashboards/infra.json"
+INFRA_DASH_DIR="$HERE/../docker/grafana/dashboards"
+APP_DASH_DIR="$HERE/../docker/grafana/dashboards-app"
 
 [[ -f "$ORGS_FILE" ]] || { echo "Run 'make render' first (missing scripts/.orgs)"; exit 1; }
 auth=(-fsS -u "${ADMIN_USER}:${ADMIN_PASS}")
 
-# The shared infra dashboard is FILE-provisioned into the admin org (org 1)
-# automatically. Project orgs are created here at runtime, so file provisioning
-# can't reach them — we import the same dashboard into each via the API below.
-# It's portable: datasource template variables bind to each org's own Mimir/Loki,
-# so one JSON serves every tenant. (No-op if the file is absent.)
+# Infra dashboards (docker/grafana/dashboards/*.json — infra-host, containers,
+# nginx, ...) are FILE-provisioned into the admin org (org 1) automatically.
+# Project orgs are created here at runtime, so file provisioning can't reach
+# them — we import the same files into each via the API below. They're
+# portable: datasource template variables bind to each org's own Mimir/Loki,
+# so one JSON serves every tenant.
 #
-# GROUPED tenants (group set in tenants.yaml) get a VARIANT instead: on a shared
-# VM the agent pushes infra to the group's _infra-<group> tenant, NOT the
-# project's own — so the normal dashboard, which defaults to the org's default
-# (app) datasources, would render empty. The variant is derived from the same
-# infra.json (single source of truth, nothing to drift): the mimir/loki
-# datasource picker variables are dropped and every reference is pinned to the
-# uids of the org's group-infra pair (mimir-infra / loki-infra — fixed per org,
-# see render.py). Same dashboard uid, so the URL is identical either way.
+# GROUPED tenants (group set in tenants.yaml) get a VARIANT instead: on a
+# shared VM the agent pushes infra to the group's _infra-<group> tenant, NOT
+# the project's own — so the normal dashboard, which defaults to the org's
+# default (app) datasources, would render empty. The variant is derived from
+# the same source file (nothing to drift): the mimir/loki datasource picker
+# variables are dropped and every reference is pinned to the uids of the org's
+# group-infra pair (mimir-infra / loki-infra — fixed per org, see render.py).
+# Same dashboard uid, so the URL is identical either way.
+#
+# App dashboards (docker/grafana/dashboards-app/*.json — RED, ...) are DIFFERENT:
+# they're app data (traces/metrics the project itself sent), never affected by
+# infra grouping, and never meaningful in the admin org — so they live outside
+# the file-provisioned path and are API-imported into every PROJECT org only,
+# always with the normal (unpinned) variant.
 
-DASH_PAYLOAD=""
-DASH_PAYLOAD_GROUPED=""
-if [[ -f "$DASH_FILE" ]]; then
-  DASH_PAYLOAD="$(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m["id"]=None; print(json.dumps({"dashboard":m,"overwrite":True,"folderId":0}))' "$DASH_FILE")"
-  DASH_PAYLOAD_GROUPED="$(python3 - "$DASH_FILE" <<'PYEOF'
+build_normal_payload() {   # $1 = dashboard json path
+  python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m["id"]=None; print(json.dumps({"dashboard":m,"overwrite":True,"folderId":0}))' "$1"
+}
+
+build_grouped_payload() {  # $1 = dashboard json path — pins ${mimir}/${loki} to the group-infra datasource uids
+  python3 - "$1" <<'PYEOF'
 import json, sys
 
 m = json.load(open(sys.argv[1]))
@@ -73,8 +82,22 @@ def walk(o):
 
 print(json.dumps({"dashboard": walk(m), "overwrite": True, "folderId": 0}))
 PYEOF
-)"
-fi
+}
+
+declare -A INFRA_PAYLOAD INFRA_PAYLOAD_GROUPED
+for f in "$INFRA_DASH_DIR"/*.json; do
+  [[ -e "$f" ]] || continue
+  name="$(basename "$f")"
+  INFRA_PAYLOAD["$name"]="$(build_normal_payload "$f")"
+  INFRA_PAYLOAD_GROUPED["$name"]="$(build_grouped_payload "$f")"
+done
+
+declare -A APP_PAYLOAD
+for f in "$APP_DASH_DIR"/*.json; do
+  [[ -e "$f" ]] || continue
+  name="$(basename "$f")"
+  APP_PAYLOAD["$name"]="$(build_normal_payload "$f")"
+done
 
 # Wait for Grafana to be reachable.
 until curl -fsS -o /dev/null "${GRAFANA_URL}/api/health" 2>/dev/null; do
@@ -127,19 +150,29 @@ while IFS='|' read -r org_id id group display_name; do
     esac
   done < "${BOOTSTRAP_DIR}/${id}.ndjson"
 
-  # 3) Import the infra dashboard into THIS org (active org is set above) —
-  #    the group-pinned variant for grouped tenants, the normal one otherwise.
-  #    Non-fatal: a dashboard hiccup shouldn't abort org/datasource provisioning.
-  dash_payload="$DASH_PAYLOAD" dash_kind="infra dashboard"
-  [[ -n "$group" ]] && { dash_payload="$DASH_PAYLOAD_GROUPED"; dash_kind="infra dashboard (group: ${group})"; }
-  if [[ -n "$dash_payload" ]]; then
+  # 3) Import dashboards into THIS org (active org is set above): every infra
+  #    dashboard (group-pinned variant for grouped tenants, normal otherwise),
+  #    plus every app dashboard (always normal — app data isn't affected by
+  #    infra grouping). Non-fatal: a dashboard hiccup shouldn't abort
+  #    org/datasource provisioning.
+  for name in "${!INFRA_PAYLOAD[@]}"; do
+    dash_payload="${INFRA_PAYLOAD[$name]}"; dash_kind="$name"
+    [[ -n "$group" ]] && { dash_payload="${INFRA_PAYLOAD_GROUPED[$name]}"; dash_kind="${name} (group: ${group})"; }
     code=$(curl -s -o /dev/null -w '%{http_code}' -u "${ADMIN_USER}:${ADMIN_PASS}" \
       -H 'Content-Type: application/json' -d "$dash_payload" "${GRAFANA_URL}/api/dashboards/db")
     case "$code" in
       200) echo "  org ${real_id}: ${dash_kind} imported" ;;
       *)   echo "  org ${real_id}: ${dash_kind} import WARN (${code})" ;;
     esac
-  fi
+  done
+  for name in "${!APP_PAYLOAD[@]}"; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -u "${ADMIN_USER}:${ADMIN_PASS}" \
+      -H 'Content-Type: application/json' -d "${APP_PAYLOAD[$name]}" "${GRAFANA_URL}/api/dashboards/db")
+    case "$code" in
+      200) echo "  org ${real_id}: ${name} imported" ;;
+      *)   echo "  org ${real_id}: ${name} import WARN (${code})" ;;
+    esac
+  done
 done < "$ORGS_FILE"
 
 # Restore the admin session to org 1.
