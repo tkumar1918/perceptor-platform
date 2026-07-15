@@ -133,13 +133,25 @@ agents**. There are two, deliberately separate:
 
 Both push outbound only; neither opens inbound ports.
 
+**One VM, several projects?** A host's single agent carries one token, so it
+can't file into several project tenants at once. Give it a **group** instead: add
+a reserved `_infra-<group>` tenant and set `group: <group>` on each project that
+shares the box (see [tenants.example.yaml](tenants.example.yaml)). The agent
+reports to `_infra-<group>` — a tenant no one project owns — and every one of
+those projects sees the shared box from its **own** Grafana org, without any
+project's tenant being polluted by another's data. Which token the agent uses is
+the agent repo's one real deploy decision — see *Which token does this VM use?*
+there.
+
 A shared **"Infrastructure — hosts & containers"** dashboard ships with the stack
 ([docker/grafana/dashboards/infra.json](docker/grafana/dashboards/infra.json)) —
 host CPU/mem/disk/net, per-container CPU/mem, and infra logs. Because infra
 telemetry is identical everywhere, **one dashboard works for every tenant**: it's
 auto-provisioned into the admin org (reading `_infra`) and imported into each
 project org by `make bootstrap-orgs`, where its datasource variables bind to that
-project's own Mimir/Loki. Pick your `vm` from the dropdown.
+project's own Mimir/Loki. Pick your `vm` from the dropdown. (Projects in a
+`group` get a variant pinned to the shared infra datasources instead, so it shows
+the shared box rather than their own — otherwise empty — infra namespace.)
 
 ---
 
