@@ -231,6 +231,7 @@ def render_caddy(tenants):
         blocks.append(
             f'\t@{tid} header Authorization "Bearer {t["token"]}"\n'
             f'\thandle @{tid} {{\n'
+            f'\t\tlog_name ok                    # accepted -> sampled success sink\n'
             f'\t\treverse_proxy otel-collector:4318 {{\n'
             f'\t\t\theader_up X-Scope-OrgID {tid}\n'
             f'\t\t\theader_up -Authorization\n'
@@ -240,12 +241,58 @@ def render_caddy(tenants):
     body = "\n".join(blocks)
     write("caddy/Caddyfile",
           GEN +
-          "{\n\tadmin off\n\tauto_https off   # prod: remove + set email for auto-HTTPS\n}\n\n"
+          # --- Global options: access-log routing into two sinks. ---------------
+          # Alloy scrapes Caddy's stdout into the _infra tenant, so these lines show
+          # up in Grafana. We split them so the edge log stays useful AND cheap:
+          #   access_fail -> EVERY rejected request (401), never sampled = the signal
+          #                  you actually want (a misconfigured token, a probe, etc.).
+          #   access_ok   -> accepted requests, heavily sampled = a heartbeat proving
+          #                  traffic flows, without logging every telemetry push.
+          # The Authorization header (bearer token) is deleted from every line so
+          # project tokens never land in Loki. 'default' keeps Caddy's own runtime
+          # log on stderr and excludes the access namespaces (no dup / no unsampled
+          # leak). Tune the success heartbeat via the sampling block below.
+          "{\n"
+          "\tadmin off\n"
+          "\tauto_https off   # prod: remove + set email for auto-HTTPS\n\n"
+          "\tlog default {\n"
+          "\t\toutput stderr\n"
+          "\t\texclude http.log.access.ok http.log.access.fail\n"
+          "\t}\n"
+          "\tlog access_fail {          # all rejections, unsampled\n"
+          "\t\toutput stdout\n"
+          "\t\tformat filter {\n"
+          "\t\t\twrap json\n"
+          "\t\t\trequest>headers>Authorization delete\n"
+          "\t\t}\n"
+          "\t\tinclude http.log.access.fail\n"
+          "\t}\n"
+          "\tlog access_ok {            # accepted requests, sampled heartbeat\n"
+          "\t\toutput stdout\n"
+          "\t\tformat filter {\n"
+          "\t\t\twrap json\n"
+          "\t\t\trequest>headers>Authorization delete\n"
+          "\t\t}\n"
+          "\t\tinclude http.log.access.ok\n"
+          "\t\t# Throttle the accepted-request heartbeat: log the first few requests\n"
+          "\t\t# in each sampling window, then drop the rest, so a busy edge doesn't\n"
+          "\t\t# flood Loki with 200s. NOTE: no 'interval' on purpose — its Caddyfile\n"
+          "\t\t# syntax changed between 2.10 (integer ns) and 2.11 (duration like 1m),\n"
+          "\t\t# so hard-coding either breaks the other; omitting it uses the built-in\n"
+          "\t\t# default and parses on both. Failures are never sampled (sink above).\n"
+          "\t\tsampling {\n"
+          "\t\t\tfirst 3\n"
+          "\t\t\tthereafter 100000\n"
+          "\t\t}\n"
+          "\t}\n"
+          "}\n\n"
           ":4318 {\n"
+          "\tlog                        # enable access logging; log_name (below) routes each request to a sink\n\n"
           "\t# --- BEGIN tenants ---\n"
           f"{body}"
           "\t# --- END tenants ---\n\n"
           "\thandle {\n"
+          "\t\tlog_name fail              # rejected -> unsampled failure sink\n"
           '\t\trespond "Unauthorized: missing or invalid project token" 401\n'
           "\t}\n}\n")
 
