@@ -1,87 +1,55 @@
 # ============================================================================
-# TEMPLATE — copy me to tenants.yaml, then edit for THIS deployment:
+# TEMPLATE — copy to tenants.yaml, then edit for THIS deployment:
 #
 #     cp tenants.example.yaml tenants.yaml
 #
-# tenants.yaml is GITIGNORED (per-instance): it holds YOUR real project list, so
-# it's never shared/committed — every deployment runs its own projects. This
-# committed example only documents the shape. Same pattern as .env / .env.example.
-# ----------------------------------------------------------------------------
-#
-# SOURCE OF TRUTH for every project (tenant) on the platform.
-#
-# Adding a project = add an entry here (just a unique `id` + `display_name`) then
-# run `make render` + `make reload`. `make render` regenerates:
-#   - docker/caddy/Caddyfile               (token -> tenant map)
-#   - docker/mimir/overrides.yaml          (per-tenant metric retention/limits)
-#   - docker/loki/overrides.yaml           (per-tenant log retention/limits)
-#   - docker/tempo/overrides.yaml          (per-tenant trace retention)
-#   - docker/grafana/bootstrap/<id>.ndjson (per-org datasource payloads, API-applied)
-#
-# You do NOT set `org_id`. `make render` allocates a Grafana org_id per tenant into
-# tenants.lock.yaml (gitignored, per-instance) and reuses it forever — org 1 is the
-# platform admin. Anything you do write is only a hint; invalid/taken values are
-# healed to the next free number. `display_name` must be unique (orgs are bound by
-# name at bootstrap, not by number).
-#
-# Ingest TOKENS are not set here either. `make render` auto-generates one per tenant
-# into tenants.secrets.yaml (gitignored) and reuses it forever.
+# tenants.yaml is gitignored (per-instance). Edit it, then `make render` +
+# `make reload`. render owns org_id (tenants.lock.yaml) and ingest tokens
+# (tenants.secrets.yaml) — you set neither. `display_name` must be unique.
 # ============================================================================
 
 defaults:
   metrics_retention: 30d
-  logs_retention: 720h          # 30d (Loki uses hours)
-  traces_retention: 720h        # 30d (Tempo uses hours)
-  ingestion_rate: 25000         # samples/sec (Mimir)
-  max_series: 300000            # active series per tenant (Mimir)
-  # Tempo per-tenant overrides REPLACE (not merge with) the defaults, so these
-  # must be set for every tenant or trace ingestion silently drops to 0 bytes/s.
-  traces_rate_limit_bytes: 15000000   # 15 MB/s per tenant
-  traces_burst_bytes: 25000000
+  logs_retention: 720h                # Loki uses hours (720h = 30d)
+  traces_retention: 720h              # Tempo uses hours (720h = 30d)
+  ingestion_rate: 25000               # samples/sec (Mimir)
+  max_series: 300000                  # active series per tenant (Mimir)
+  traces_rate_limit_bytes: 15000000   # 15 MB/s — Tempo overrides REPLACE these
+  traces_burst_bytes: 25000000        # defaults, so both must be set per tenant
 
 tenants:
-  # Minimal tenant — inherits every default above.
-  - id: example-service            # == X-Scope-OrgID. lowercase, no spaces.
+  # Minimal — inherits every default.
+  - id: example-service               # == X-Scope-OrgID. lowercase, no spaces.
     display_name: "Example Service"
 
-  # Tenant that overrides some defaults (longer retention, higher limits).
+  # Overrides some defaults.
   - id: another-service
     display_name: "Another Service"
     metrics_retention: 90d
-    logs_retention: 2160h          # 90d
-    traces_retention: 2160h        # 90d
+    logs_retention: 2160h             # 90d
+    traces_retention: 2160h           # 90d
     ingestion_rate: 50000
     max_series: 500000
 
-  # `group` — for several projects sharing ONE VM/host. Each gets an EXTRA,
-  # read-only datasource pair (Mimir+Loki) in its OWN org, pointed at the
-  # group's shared infra tenant — so opening THIS project's Grafana also
-  # shows the box it runs on and its own container's stdout/stderr, instead
-  # of that data being visible only from the separate admin-only org. Not a
-  # replacement for the tenant's own app-level datasources — an addition.
-  # `make bootstrap-orgs` also imports the infra dashboard pre-pinned to this
-  # pair into grouped orgs (ungrouped orgs get the picker-variable version).
-  # group "X" requires a matching reserved tenant "_infra-X" below; render
-  # fails loudly if it's missing. Lowercase slug ([a-z0-9-]).
+  # `group` — several projects sharing one VM. Adds a read-only infra
+  # datasource pair (+ pinned dashboard) to this project's own org, pointed at
+  # the shared `_infra-<group>` tenant below. Slug [a-z0-9-]; the matching
+  # reserved tenant is required (render fails without it). See README.
   - id: some-dev-project
     display_name: "Some Dev Project"
     group: dev-instance
+
 # ============================================================================
-# RESERVED platform tenants (not projects — no dedicated Grafana org).
-# id MUST start with "_". Read from the admin org (org 1). Keep _infra.
+# RESERVED tenants — platform namespaces, no Grafana org (read from admin org).
+# id MUST start with "_".
 # ============================================================================
 reserved:
-  - id: _infra                     # platform self-monitoring: the stack's own
-                                   # host, containers, system/edge logs. Also the
-                                   # catch-all for shared hosts. Admin-org only.
+  # Platform self-monitoring + catch-all for shared hosts. Keep this.
+  - id: _infra
     metrics_retention: 90d
-    logs_retention: 2160h          # 90d
-    # traces_retention folds in from defaults but is unused — infra emits no traces.
-    # ingestion_rate / max_series / traces_* fold in from defaults.
+    logs_retention: 2160h
 
-  # One per group used above. Whatever VM agent (Alloy) monitors "dev-instance"
-  # must ingest with THIS tenant's token (tenants.secrets.yaml after render),
-  # not the global _infra token — they are separate namespaces.
+  # One per group above. The VM agent ingests with THIS token (not _infra's).
   - id: _infra-dev-instance
     metrics_retention: 90d
     logs_retention: 2160h
