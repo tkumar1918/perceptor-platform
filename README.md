@@ -5,7 +5,9 @@ Multi-tenant observability for **10–50 projects** with **hard isolation**, on
 
 Stack: **Caddy** (edge auth) → **OpenTelemetry Collector** → **Mimir** (metrics)
 · **Loki** (logs) · **Tempo** (traces) → **SeaweedFS** (S3, swappable for AWS S3)
-· **Grafana** (one org per project). See [REDESIGN.md](REDESIGN.md) for the why.
+· **Grafana** (one org per project). See [REDESIGN.md](REDESIGN.md) for the why,
+and [docs/architecture.md](docs/architecture.md) for the end-to-end data flow
+(diagram + protocol on every hop).
 
 > This is the redesign that replaces the original `../perceptor/` prototype.
 > The two can run side by side; nothing here touches the old folder.
