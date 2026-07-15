@@ -1,0 +1,33 @@
+# ============================================================================
+# Resource attributes to strip from EVERY signal (logs, traces, metrics) and
+# EVERY tenant. This is the one place this applies platform-wide — no app has
+# to configure anything, and it doesn't matter what language/SDK sent the data.
+#
+# Add or remove a line, then `make render` — it regenerates the marked block
+# inside docker/otel/collector-config.yaml. Don't edit that block by hand; it
+# gets overwritten.
+#
+# These are SDK/runtime/OS identity fields that never change for the life of a
+# process, get repeated on every span/metric/log line regardless, and (for
+# logs specifically) land in Loki as structured metadata that costs storage
+# per line. Keep this list to things nobody queries on. If you need a field
+# for debugging, take it out of this list instead of digging through the
+# collector config.
+# ============================================================================
+- process.pid
+- process.owner
+- process.command
+- process.executable.name
+- process.executable.path
+- process.command_args
+- process.runtime.name
+- process.runtime.version
+- process.runtime.description
+- os.description
+- os.type
+- host.arch
+- telemetry.distro.name
+- telemetry.distro.version
+- telemetry.sdk.language
+- telemetry.sdk.name
+- telemetry.sdk.version

@@ -15,6 +15,14 @@ then `make reload`. This regenerates, atomically and consistently:
   tenants.secrets.yaml                         per-tenant ingest token (generated, gitignored)
   tenants.lock.yaml                            per-tenant Grafana org_id (generated, gitignored — per instance)
 
+Also regenerates one marked block, independent of tenants.yaml:
+
+  docker/otel/collector-config.yaml (partial)  dropped resource attrs, from
+                                                docker/otel/dropped-resource-attributes.yaml
+                                                — applies to every signal, every
+                                                tenant, at the collector. Add a
+                                                name to that file, not this one.
+
 You do NOT hand-assign org_id: this allocates a stable one per tenant into
 tenants.lock.yaml and heals any bad input (missing / duplicate / reserved) to
 the next free number instead of failing — same idea as the ingest-token ledger.
@@ -398,6 +406,46 @@ def render_orgs(tenants):
     print("  wrote scripts/.orgs")
 
 
+COLLECTOR_ATTRS_BEGIN = "          # --- BEGIN GENERATED from docker/otel/dropped-resource-attributes.yaml — edit that file + `make render`, not this block ---\n"
+COLLECTOR_ATTRS_END = "          # --- END GENERATED ---\n"
+
+
+def render_collector_attrs():
+    """Regenerate the marked delete_key block in collector-config.yaml from
+    docker/otel/dropped-resource-attributes.yaml.
+
+    Unlike the other render_* functions, collector-config.yaml is NOT
+    per-instance data (no tenant tokens/ids in it — it's identical on every
+    deployment) and is mostly hand-tuned (memory_limiter, batch, filter/logs
+    rules). So it stays a committed file that's edited directly, except for
+    this one marked block, which is regenerated in place rather than the
+    whole file being rewritten from scratch like render_caddy() etc.
+    """
+    attrs_path = os.path.join(DOCKER, "otel", "dropped-resource-attributes.yaml")
+    with open(attrs_path) as f:
+        attrs = yaml.safe_load(f) or []
+    if not isinstance(attrs, list) or not all(isinstance(a, str) and a for a in attrs):
+        sys.exit("docker/otel/dropped-resource-attributes.yaml must be a YAML list of non-empty strings")
+    if len(set(attrs)) != len(attrs):
+        sys.exit("docker/otel/dropped-resource-attributes.yaml has a duplicate attribute name")
+
+    config_path = os.path.join(DOCKER, "otel", "collector-config.yaml")
+    with open(config_path) as f:
+        text = f.read()
+
+    try:
+        before, rest = text.split(COLLECTOR_ATTRS_BEGIN, 1)
+        _, after = rest.split(COLLECTOR_ATTRS_END, 1)
+    except ValueError:
+        sys.exit("collector-config.yaml: GENERATED markers not found or malformed — "
+                 "did the surrounding block get edited by hand?")
+
+    generated = "".join(f'          - delete_key(attributes, "{a}")\n' for a in attrs)
+    with open(config_path, "w") as f:
+        f.write(before + COLLECTOR_ATTRS_BEGIN + generated + COLLECTOR_ATTRS_END + after)
+    print(f"  wrote docker/otel/collector-config.yaml ({len(attrs)} dropped resource attributes)")
+
+
 def main():
     tenants, reserved = load()
     ingest = tenants + reserved   # everything that ingests: projects + reserved
@@ -411,6 +459,7 @@ def main():
     render_datasources(tenants)    # per-org datasources: projects only
     render_dashboards_provider(tenants)
     render_orgs(tenants)           # Grafana orgs: projects only (reserved use org 1)
+    render_collector_attrs()       # dropped-resource-attributes.yaml -> collector-config.yaml
     print("Done. Next: `make reload` (and `make bootstrap-orgs` on first run).")
 
 

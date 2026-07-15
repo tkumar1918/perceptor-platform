@@ -62,14 +62,14 @@ processors:
           - set(attributes["deployment_environment"], resource.attributes["deployment.environment"])
           - set(attributes["deployment_environment"], resource.attributes["deployment.environment.name"])
 
-  # ── LOG NOISE CONTROL (edit the two marked lists) ─────────────────────────
-  # Applied to the LOGS pipeline only. Two independent levers:
-  #   • filter/logs    — BLACKLIST whole log RECORDS (drop them). Add OTTL
-  #                      conditions; a record is dropped if ANY is true.
-  #   • transform/logs — strip heavy ATTRIBUTES that ride on EVERY line (they
-  #                      land in Loki as structured metadata and bloat storage).
-  # This is platform-wide (all tenants). Per-app trimming can also be done in the
-  # app's OTel SDK, but this is the one central knob.
+  # ── NOISE CONTROL ──────────────────────────────────────────────────────────
+  # Two independent, platform-wide levers (every tenant, no app config needed):
+  #   • filter/logs           — BLACKLIST whole log RECORDS (logs pipeline only).
+  #   • transform/trim_resource — strip SDK/runtime/OS resource attributes that
+  #     never change for a process's life, from EVERY signal (logs/traces/metrics).
+  #     The actual list lives in ../otel/dropped-resource-attributes.yaml — edit
+  #     that file, then `make render`. Do not edit the generated block below by
+  #     hand.
 
   # DROP whole records. Empty by default (drops nothing). Uncomment / add rules.
   filter/logs:
@@ -83,27 +83,44 @@ processors:
         # - 'resource.attributes["service.name"] == "chatty-service"'        # silence one service
         - 'false == true'   # harmless no-op placeholder; keep at least one entry
 
-  # STRIP heavy per-line attributes. These SDK/runtime/OS fields are attached to
-  # every log and almost never queried — deleting them here shrinks each line.
-  # Remove a delete_key line to KEEP that attribute; add lines to strip more.
-  transform/logs:
+  # STRIP noisy resource attributes from every signal. context: resource means
+  # each statement runs ONCE per resource (not once per span/datapoint/log
+  # line), and reaches the resource's own attributes directly — no
+  # "resource." prefix needed, unlike transform/env above (context: span /
+  # datapoint), which reaches up to the resource from a per-item context.
+  # The same generated list is reused across all three via a YAML anchor, so
+  # there is exactly one place this is generated FROM (the source file) and
+  # one place it is generated TO (the anchor below).
+  transform/trim_resource:
     error_mode: ignore
     log_statements:
-      # Resource-level keys stripped with delete_key(resource.attributes, "…").
-      # Per-line keys would use delete_key(log.attributes, "…"), e.g. "thread.id".
-      - statements:
-          - delete_key(resource.attributes, "process.command_args")
-          - delete_key(resource.attributes, "process.executable.path")
-          - delete_key(resource.attributes, "process.runtime.description")
-          - delete_key(resource.attributes, "os.description")
-          - delete_key(resource.attributes, "os.type")
-          - delete_key(resource.attributes, "host.arch")
-          - delete_key(resource.attributes, "telemetry.distro.name")
-          - delete_key(resource.attributes, "telemetry.distro.version")
-          - delete_key(resource.attributes, "telemetry.sdk.language")
-          - delete_key(resource.attributes, "telemetry.sdk.name")
-          - delete_key(resource.attributes, "telemetry.sdk.version")
-          # --- ADD MORE KEYS TO STRIP HERE (resource.attributes or log.attributes) ---
+      - context: resource
+        statements: &dropped_resource_attrs
+          # --- BEGIN GENERATED from docker/otel/dropped-resource-attributes.yaml — edit that file + `make render`, not this block ---
+          - delete_key(attributes, "process.pid")
+          - delete_key(attributes, "process.owner")
+          - delete_key(attributes, "process.command")
+          - delete_key(attributes, "process.executable.name")
+          - delete_key(attributes, "process.executable.path")
+          - delete_key(attributes, "process.command_args")
+          - delete_key(attributes, "process.runtime.name")
+          - delete_key(attributes, "process.runtime.version")
+          - delete_key(attributes, "process.runtime.description")
+          - delete_key(attributes, "os.description")
+          - delete_key(attributes, "os.type")
+          - delete_key(attributes, "host.arch")
+          - delete_key(attributes, "telemetry.distro.name")
+          - delete_key(attributes, "telemetry.distro.version")
+          - delete_key(attributes, "telemetry.sdk.language")
+          - delete_key(attributes, "telemetry.sdk.name")
+          - delete_key(attributes, "telemetry.sdk.version")
+          # --- END GENERATED ---
+    trace_statements:
+      - context: resource
+        statements: *dropped_resource_attrs
+    metric_statements:
+      - context: resource
+        statements: *dropped_resource_attrs
 
 exporters:
   prometheusremotewrite:
@@ -138,13 +155,13 @@ service:
   pipelines:
     metrics:
       receivers: [otlp]
-      processors: [memory_limiter, transform/env, batch]
+      processors: [memory_limiter, transform/trim_resource, transform/env, batch]
       exporters: [prometheusremotewrite]
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, filter/logs, transform/logs, batch]
+      processors: [memory_limiter, filter/logs, transform/trim_resource, batch]
       exporters: [otlphttp/loki]
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, transform/env, batch]
+      processors: [memory_limiter, transform/trim_resource, transform/env, batch]
       exporters: [otlp/tempo]
