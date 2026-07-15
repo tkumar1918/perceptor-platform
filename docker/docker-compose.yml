@@ -77,7 +77,8 @@ services:
       - caddy-data:/data
     ports:
       - "4318:4318"   # OTLP/HTTP (authenticated) — internal, or behind an existing TLS front
-      # - "4317:4317" # OTLP/gRPC — see Caddyfile note before enabling
+      # OTLP/gRPC needs no separate port: over the TLS edge it rides 443 with HTTP
+      # (matched by content-type, proxied to the collector's gRPC over h2c).
       # Public TLS edge — only when Caddy terminates HTTPS itself (EDGE_HOST set,
       # see .env). These DEFAULT to localhost high-ports so the base stack never
       # competes with a host nginx for 80/443: the "keep it behind nginx" setup

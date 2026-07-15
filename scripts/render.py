@@ -309,10 +309,18 @@ def render_caddy(tenants):
     blocks = []
     for t in tenants:
         tid = t["id"]
+        # Each tenant handles BOTH transports: OTLP/gRPC (Content-Type
+        # application/grpc, matched by @grpc below) goes to the collector's gRPC
+        # listener over h2c; everything else is OTLP/HTTP on :4318. Both share the
+        # one bearer-token match and stamp the same X-Scope-OrgID.
         blocks.append(
             f'\t@{tid} header Authorization "Bearer {t["token"]}"\n'
             f'\thandle @{tid} {{\n'
             f'\t\tlog_name ok                    # accepted -> sampled success sink\n'
+            f'\t\treverse_proxy @grpc h2c://otel-collector:4317 {{\n'
+            f'\t\t\theader_up X-Scope-OrgID {tid}\n'
+            f'\t\t\theader_up -Authorization\n'
+            f'\t\t}}\n'
             f'\t\treverse_proxy otel-collector:4318 {{\n'
             f'\t\t\theader_up X-Scope-OrgID {tid}\n'
             f'\t\t\theader_up -Authorization\n'
@@ -383,6 +391,9 @@ def render_caddy(tenants):
            # --- Ingest edge vhost (token -> tenant). Same logic on :4318 or a host. ---
            f"{edge_addr} {{\n"
            "\tlog                        # enable access logging; log_name (below) routes each request to a sink\n\n"
+           "\t# OTLP/gRPC shares this port with HTTP (over TLS it's h2; distinguished by\n"
+           "\t# content-type). Each tenant routes @grpc to the collector's gRPC listener.\n"
+           "\t@grpc header Content-Type application/grpc*\n\n"
            "\t# --- BEGIN tenants ---\n"
            f"{body}"
            "\t# --- END tenants ---\n\n"

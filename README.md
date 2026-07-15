@@ -231,8 +231,11 @@ means re-issuing every project's token. To rotate one, delete its line and re-re
 
 - **Only the edge is exposed.** Mimir/Loki/Tempo/Collector are on an internal
   Docker network with no host ports — there is no unauthenticated read/write path.
-- **gRPC ingest (4317)** is intentionally not exposed yet (Caddy h2c needs more
-  setup); use OTLP/HTTP. The collector's gRPC stays internal.
+- **gRPC ingest** works over the TLS edge (`EDGE_HOST` set): OTLP/gRPC rides the
+  same `:443` as HTTP — Caddy matches `Content-Type: application/grpc` and proxies
+  it to the collector's gRPC listener over h2c, with the same bearer-token auth.
+  Point a gRPC exporter at `https://<EDGE_HOST>` (no extra port). Without a TLS
+  edge (plain `:4318`), use OTLP/HTTP — h2c gRPC on the bare port isn't enabled.
 - **Single-node object storage is a shared failure domain.** For hard isolation,
   replicate SeaweedFS + take offsite backups, or point `.env` at **AWS S3 / R2 /
   B2** to offload durability. This is the main ceiling of a one-box deployment.
