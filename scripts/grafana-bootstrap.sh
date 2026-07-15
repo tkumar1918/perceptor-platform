@@ -34,10 +34,46 @@ auth=(-fsS -u "${ADMIN_USER}:${ADMIN_PASS}")
 # can't reach them — we import the same dashboard into each via the API below.
 # It's portable: datasource template variables bind to each org's own Mimir/Loki,
 # so one JSON serves every tenant. (No-op if the file is absent.)
+#
+# GROUPED tenants (group set in tenants.yaml) get a VARIANT instead: on a shared
+# VM the agent pushes infra to the group's _infra-<group> tenant, NOT the
+# project's own — so the normal dashboard, which defaults to the org's default
+# (app) datasources, would render empty. The variant is derived from the same
+# infra.json (single source of truth, nothing to drift): the mimir/loki
+# datasource picker variables are dropped and every reference is pinned to the
+# uids of the org's group-infra pair (mimir-infra / loki-infra — fixed per org,
+# see render.py). Same dashboard uid, so the URL is identical either way.
 
 DASH_PAYLOAD=""
+DASH_PAYLOAD_GROUPED=""
 if [[ -f "$DASH_FILE" ]]; then
   DASH_PAYLOAD="$(python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m["id"]=None; print(json.dumps({"dashboard":m,"overwrite":True,"folderId":0}))' "$DASH_FILE")"
+  DASH_PAYLOAD_GROUPED="$(python3 - "$DASH_FILE" <<'PYEOF'
+import json, sys
+
+m = json.load(open(sys.argv[1]))
+m["id"] = None
+
+# Drop the datasource pickers; pin every ${mimir}/${loki} reference instead.
+tpl = m.get("templating", {}).get("list")
+if tpl is not None:
+    m["templating"]["list"] = [
+        v for v in tpl
+        if not (v.get("type") == "datasource" and v.get("name") in ("mimir", "loki"))
+    ]
+
+PIN = {"${mimir}": "mimir-infra", "${loki}": "loki-infra"}
+
+def walk(o):
+    if isinstance(o, dict):
+        return {k: walk(v) for k, v in o.items()}
+    if isinstance(o, list):
+        return [walk(v) for v in o]
+    return PIN.get(o, o) if isinstance(o, str) else o
+
+print(json.dumps({"dashboard": walk(m), "overwrite": True, "folderId": 0}))
+PYEOF
+)"
 fi
 
 # Wait for Grafana to be reachable.
@@ -45,7 +81,9 @@ until curl -fsS -o /dev/null "${GRAFANA_URL}/api/health" 2>/dev/null; do
   echo "waiting for Grafana at ${GRAFANA_URL} ..."; sleep 2
 done
 
-while IFS='|' read -r org_id id display_name; do
+# .orgs fields: org_id|id|group|display_name — display_name LAST because it may
+# itself contain '|' (read folds the remainder of the line into the final var).
+while IFS='|' read -r org_id id group display_name; do
   [[ -z "$id" ]] && continue
 
   # 1) Resolve the org BY NAME, capturing the real id Grafana assigned (create on
@@ -89,14 +127,17 @@ while IFS='|' read -r org_id id display_name; do
     esac
   done < "${BOOTSTRAP_DIR}/${id}.ndjson"
 
-  # 3) Import the shared infra dashboard into THIS org (active org is set above).
+  # 3) Import the infra dashboard into THIS org (active org is set above) —
+  #    the group-pinned variant for grouped tenants, the normal one otherwise.
   #    Non-fatal: a dashboard hiccup shouldn't abort org/datasource provisioning.
-  if [[ -n "$DASH_PAYLOAD" ]]; then
+  dash_payload="$DASH_PAYLOAD" dash_kind="infra dashboard"
+  [[ -n "$group" ]] && { dash_payload="$DASH_PAYLOAD_GROUPED"; dash_kind="infra dashboard (group: ${group})"; }
+  if [[ -n "$dash_payload" ]]; then
     code=$(curl -s -o /dev/null -w '%{http_code}' -u "${ADMIN_USER}:${ADMIN_PASS}" \
-      -H 'Content-Type: application/json' -d "$DASH_PAYLOAD" "${GRAFANA_URL}/api/dashboards/db")
+      -H 'Content-Type: application/json' -d "$dash_payload" "${GRAFANA_URL}/api/dashboards/db")
     case "$code" in
-      200) echo "  org ${real_id}: infra dashboard imported" ;;
-      *)   echo "  org ${real_id}: infra dashboard import WARN (${code})" ;;
+      200) echo "  org ${real_id}: ${dash_kind} imported" ;;
+      *)   echo "  org ${real_id}: ${dash_kind} import WARN (${code})" ;;
     esac
   fi
 done < "$ORGS_FILE"

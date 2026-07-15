@@ -53,6 +53,19 @@ tenants:
     ingestion_rate: 50000
     max_series: 500000
 
+  # `group` — for several projects sharing ONE VM/host. Each gets an EXTRA,
+  # read-only datasource pair (Mimir+Loki) in its OWN org, pointed at the
+  # group's shared infra tenant — so opening THIS project's Grafana also
+  # shows the box it runs on and its own container's stdout/stderr, instead
+  # of that data being visible only from the separate admin-only org. Not a
+  # replacement for the tenant's own app-level datasources — an addition.
+  # `make bootstrap-orgs` also imports the infra dashboard pre-pinned to this
+  # pair into grouped orgs (ungrouped orgs get the picker-variable version).
+  # group "X" requires a matching reserved tenant "_infra-X" below; render
+  # fails loudly if it's missing. Lowercase slug ([a-z0-9-]).
+  - id: some-dev-project
+    display_name: "Some Dev Project"
+    group: dev-instance
 # ============================================================================
 # RESERVED platform tenants (not projects — no dedicated Grafana org).
 # id MUST start with "_". Read from the admin org (org 1). Keep _infra.
@@ -65,3 +78,10 @@ reserved:
     logs_retention: 2160h          # 90d
     # traces_retention folds in from defaults but is unused — infra emits no traces.
     # ingestion_rate / max_series / traces_* fold in from defaults.
+
+  # One per group used above. Whatever VM agent (Alloy) monitors "dev-instance"
+  # must ingest with THIS tenant's token (tenants.secrets.yaml after render),
+  # not the global _infra token — they are separate namespaces.
+  - id: _infra-dev-instance
+    metrics_retention: 90d
+    logs_retention: 2160h
