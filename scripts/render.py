@@ -292,6 +292,20 @@ def ensure_org_ids(tenants):
 
 
 def render_caddy(tenants):
+    # Public HTTPS is opt-in, per-instance, via .env (sourced by `make render`):
+    #   EDGE_HOST     — ingest hostname (e.g. lgtm.example.com). When set, the
+    #                   edge vhost binds this name and Caddy auto-provisions +
+    #                   renews a Let's Encrypt cert for it (no external nginx /
+    #                   certbot). When UNSET, the edge stays a plain ":4318" HTTP
+    #                   listener — local dev, or behind an existing TLS front.
+    #   GRAFANA_HOST  — optional; when set, add a second vhost proxying Grafana,
+    #                   so one Caddy fronts BOTH ingest and the UI on 443.
+    #   ACME_EMAIL    — Let's Encrypt account email (recommended when EDGE_HOST
+    #                   is set; used for expiry notices).
+    edge_host = os.environ.get("EDGE_HOST", "").strip()
+    grafana_host = os.environ.get("GRAFANA_HOST", "").strip()
+    acme_email = os.environ.get("ACME_EMAIL", "").strip()
+
     blocks = []
     for t in tenants:
         tid = t["id"]
@@ -306,62 +320,86 @@ def render_caddy(tenants):
             f'\t}}\n'
         )
     body = "\n".join(blocks)
-    write("caddy/Caddyfile",
-          GEN +
-          # --- Global options: access-log routing into two sinks. ---------------
-          # Alloy scrapes Caddy's stdout into the _infra tenant, so these lines show
-          # up in Grafana. We split them so the edge log stays useful AND cheap:
-          #   access_fail -> EVERY rejected request (401), never sampled = the signal
-          #                  you actually want (a misconfigured token, a probe, etc.).
-          #   access_ok   -> accepted requests, heavily sampled = a heartbeat proving
-          #                  traffic flows, without logging every telemetry push.
-          # The Authorization header (bearer token) is deleted from every line so
-          # project tokens never land in Loki. 'default' keeps Caddy's own runtime
-          # log on stderr and excludes the access namespaces (no dup / no unsampled
-          # leak). Tune the success heartbeat via the sampling block below.
-          "{\n"
-          "\tadmin off\n"
-          "\tauto_https off   # prod: remove + set email for auto-HTTPS\n\n"
-          "\tlog default {\n"
-          "\t\toutput stderr\n"
-          "\t\texclude http.log.access.ok http.log.access.fail\n"
-          "\t}\n"
-          "\tlog access_fail {          # all rejections, unsampled\n"
-          "\t\toutput stdout\n"
-          "\t\tformat filter {\n"
-          "\t\t\twrap json\n"
-          "\t\t\trequest>headers>Authorization delete\n"
-          "\t\t}\n"
-          "\t\tinclude http.log.access.fail\n"
-          "\t}\n"
-          "\tlog access_ok {            # accepted requests, sampled heartbeat\n"
-          "\t\toutput stdout\n"
-          "\t\tformat filter {\n"
-          "\t\t\twrap json\n"
-          "\t\t\trequest>headers>Authorization delete\n"
-          "\t\t}\n"
-          "\t\tinclude http.log.access.ok\n"
-          "\t\t# Throttle the accepted-request heartbeat: log the first few requests\n"
-          "\t\t# in each sampling window, then drop the rest, so a busy edge doesn't\n"
-          "\t\t# flood Loki with 200s. NOTE: no 'interval' on purpose — its Caddyfile\n"
-          "\t\t# syntax changed between 2.10 (integer ns) and 2.11 (duration like 1m),\n"
-          "\t\t# so hard-coding either breaks the other; omitting it uses the built-in\n"
-          "\t\t# default and parses on both. Failures are never sampled (sink above).\n"
-          "\t\tsampling {\n"
-          "\t\t\tfirst 3\n"
-          "\t\t\tthereafter 100000\n"
-          "\t\t}\n"
-          "\t}\n"
-          "}\n\n"
-          ":4318 {\n"
-          "\tlog                        # enable access logging; log_name (below) routes each request to a sink\n\n"
-          "\t# --- BEGIN tenants ---\n"
-          f"{body}"
-          "\t# --- END tenants ---\n\n"
-          "\thandle {\n"
-          "\t\tlog_name fail              # rejected -> unsampled failure sink\n"
-          '\t\trespond "Unauthorized: missing or invalid project token" 401\n'
-          "\t}\n}\n")
+
+    # Global block. In HTTPS mode auto_https is ON (the Caddy default) so certs
+    # are fetched for every named vhost; in plain mode it's OFF for the bare
+    # :4318 listener. email (if given) registers the ACME account.
+    if edge_host:
+        tls_globals = "\tadmin off\n"
+        if acme_email:
+            tls_globals += f"\temail {acme_email}\n"
+        tls_globals += "\n"
+    else:
+        tls_globals = ("\tadmin off\n"
+                       "\tauto_https off   # set EDGE_HOST + ACME_EMAIL in .env for public auto-HTTPS\n\n")
+
+    edge_addr = edge_host if edge_host else ":4318"
+
+    out = (GEN +
+           # --- Global options: access-log routing into two sinks. ---------------
+           # Alloy scrapes Caddy's stdout into the _infra tenant, so these lines show
+           # up in Grafana. We split them so the edge log stays useful AND cheap:
+           #   access_fail -> EVERY rejected request (401), never sampled = the signal
+           #                  you actually want (a misconfigured token, a probe, etc.).
+           #   access_ok   -> accepted requests, heavily sampled = a heartbeat proving
+           #                  traffic flows, without logging every telemetry push.
+           # The Authorization header (bearer token) is deleted from every line so
+           # project tokens never land in Loki. 'default' keeps Caddy's own runtime
+           # log on stderr and excludes the access namespaces (no dup / no unsampled
+           # leak). Tune the success heartbeat via the sampling block below.
+           "{\n"
+           + tls_globals +
+           "\tlog default {\n"
+           "\t\toutput stderr\n"
+           "\t\texclude http.log.access.ok http.log.access.fail\n"
+           "\t}\n"
+           "\tlog access_fail {          # all rejections, unsampled\n"
+           "\t\toutput stdout\n"
+           "\t\tformat filter {\n"
+           "\t\t\twrap json\n"
+           "\t\t\trequest>headers>Authorization delete\n"
+           "\t\t}\n"
+           "\t\tinclude http.log.access.fail\n"
+           "\t}\n"
+           "\tlog access_ok {            # accepted requests, sampled heartbeat\n"
+           "\t\toutput stdout\n"
+           "\t\tformat filter {\n"
+           "\t\t\twrap json\n"
+           "\t\t\trequest>headers>Authorization delete\n"
+           "\t\t}\n"
+           "\t\tinclude http.log.access.ok\n"
+           "\t\t# Throttle the accepted-request heartbeat: log the first few requests\n"
+           "\t\t# in each sampling window, then drop the rest, so a busy edge doesn't\n"
+           "\t\t# flood Loki with 200s. NOTE: no 'interval' on purpose — its Caddyfile\n"
+           "\t\t# syntax changed between 2.10 (integer ns) and 2.11 (duration like 1m),\n"
+           "\t\t# so hard-coding either breaks the other; omitting it uses the built-in\n"
+           "\t\t# default and parses on both. Failures are never sampled (sink above).\n"
+           "\t\tsampling {\n"
+           "\t\t\tfirst 3\n"
+           "\t\t\tthereafter 100000\n"
+           "\t\t}\n"
+           "\t}\n"
+           "}\n\n"
+           # --- Ingest edge vhost (token -> tenant). Same logic on :4318 or a host. ---
+           f"{edge_addr} {{\n"
+           "\tlog                        # enable access logging; log_name (below) routes each request to a sink\n\n"
+           "\t# --- BEGIN tenants ---\n"
+           f"{body}"
+           "\t# --- END tenants ---\n\n"
+           "\thandle {\n"
+           "\t\tlog_name fail              # rejected -> unsampled failure sink\n"
+           '\t\trespond "Unauthorized: missing or invalid project token" 401\n'
+           "\t}\n}\n")
+
+    # Optional second vhost: front Grafana on its own hostname, same Caddy, same
+    # auto-HTTPS. reverse_proxy preserves the Host header and upgrades WebSockets
+    # (Grafana Live) transparently — so no per-path config like nginx needs.
+    if grafana_host:
+        out += (f"\n{grafana_host} {{\n"
+                "\treverse_proxy grafana:3000\n"
+                "}\n")
+
+    write("caddy/Caddyfile", out)
 
 
 def render_mimir(tenants):

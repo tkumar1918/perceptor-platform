@@ -15,7 +15,7 @@ venv: ## Create local venv with PyYAML (for the renderer)
 	@$(PIP) install -q --upgrade pip pyyaml
 
 render: venv ## Regenerate all per-tenant config from tenants.yaml
-	@$(PY) scripts/render.py
+	@set -a; [ -f .env ] && . ./.env; set +a; $(PY) scripts/render.py   # .env feeds EDGE_HOST/GRAFANA_HOST/ACME_EMAIL into the Caddyfile
 
 up: ## Start the whole stack (after `make render`)
 	@test -f .env || { echo "Create .env from .env.example first"; exit 1; }

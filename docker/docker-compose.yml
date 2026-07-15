@@ -76,8 +76,15 @@ services:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
     ports:
-      - "4318:4318"   # OTLP/HTTP (authenticated)
+      - "4318:4318"   # OTLP/HTTP (authenticated) — internal, or behind an existing TLS front
       # - "4317:4317" # OTLP/gRPC — see Caddyfile note before enabling
+      # Public TLS edge — only when Caddy terminates HTTPS itself (EDGE_HOST set,
+      # see .env). These DEFAULT to localhost high-ports so the base stack never
+      # competes with a host nginx for 80/443: the "keep it behind nginx" setup
+      # is unaffected. To let Caddy own the public edge, set both to 0.0.0.0 in
+      # .env (EDGE_HTTP_BIND=0.0.0.0:80, EDGE_HTTPS_BIND=0.0.0.0:443).
+      - "${EDGE_HTTP_BIND:-127.0.0.1:2080}:80"
+      - "${EDGE_HTTPS_BIND:-127.0.0.1:2443}:443"
     networks: [obs]
 
   # ---------------------------------------------------------------------------
