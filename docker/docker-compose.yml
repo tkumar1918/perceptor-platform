@@ -75,17 +75,18 @@ services:
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
+    # Two interface knobs decide what this host exposes (see .env):
+    #   EDGE_BIND     — the PUBLIC TLS edge (80 + 443). Defaults to localhost so a
+    #                   fresh clone exposes nothing surprising and never fights a
+    #                   host nginx; the TLS box sets 0.0.0.0 to face the internet.
+    #   SERVICE_BIND  — the plain OTLP/HTTP port here + Grafana's UI port. Defaults
+    #                   to all interfaces for easy local dev; the TLS box sets
+    #                   127.0.0.1 so they stay on-box (debug only) — with a TLS
+    #                   edge, 80 + 443 are then the ONLY public ports.
     ports:
-      - "4318:4318"   # OTLP/HTTP (authenticated) — internal, or behind an existing TLS front
-      # OTLP/gRPC needs no separate port: over the TLS edge it rides 443 with HTTP
-      # (matched by content-type, proxied to the collector's gRPC over h2c).
-      # Public TLS edge — only when Caddy terminates HTTPS itself (EDGE_HOST set,
-      # see .env). These DEFAULT to localhost high-ports so the base stack never
-      # competes with a host nginx for 80/443: the "keep it behind nginx" setup
-      # is unaffected. To let Caddy own the public edge, set both to 0.0.0.0 in
-      # .env (EDGE_HTTP_BIND=0.0.0.0:80, EDGE_HTTPS_BIND=0.0.0.0:443).
-      - "${EDGE_HTTP_BIND:-127.0.0.1:2080}:80"
-      - "${EDGE_HTTPS_BIND:-127.0.0.1:2443}:443"
+      - "${EDGE_BIND:-127.0.0.1}:80:80"       # HTTP: ACME challenge + redirect to HTTPS
+      - "${EDGE_BIND:-127.0.0.1}:443:443"     # HTTPS edge: OTLP/HTTP, OTLP/gRPC (rides 443, h2c to collector), Grafana vhost
+      - "${SERVICE_BIND:-0.0.0.0}:4318:4318"  # plain OTLP/HTTP — the edge in dev / behind an existing TLS front
     networks: [obs]
 
   # ---------------------------------------------------------------------------
@@ -278,7 +279,11 @@ services:
       - ./grafana/dashboards:/var/lib/grafana/dashboards
       - grafana-data:/var/lib/grafana
     ports:
-      - "3001:3000"
+      # Direct UI access. With a TLS edge Grafana is served via its vhost on 443,
+      # so SERVICE_BIND=127.0.0.1 keeps this on-box only (e.g. an SSH tunnel); in
+      # dev it defaults to all interfaces. Caddy reaches Grafana over the network
+      # (grafana:3000), independent of this host port.
+      - "${SERVICE_BIND:-0.0.0.0}:3001:3000"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
       interval: 10s
