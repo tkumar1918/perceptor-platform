@@ -28,6 +28,10 @@ It's **gitignored** (per-instance, like `.env`); the repo ships
 per-tenant (Caddy tokens, backend retention/limits, Grafana datasources/orgs) is
 **rendered** from it by `make render`.
 
+New to the platform? Read **[docs/identity-model.md](docs/identity-model.md)**
+first — how tenant / token / service_name / vm relate, what's a security
+boundary vs. just a label, and "I'm adding X — what do I create?".
+
 ---
 
 ## Quick start
