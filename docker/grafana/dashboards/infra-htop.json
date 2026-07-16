@@ -194,8 +194,32 @@
     { "type": "row", "title": "Process snapshot (point-in-time, from journald)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 }, "collapsed": false, "id": 104 },
 
     {
-      "type": "table", "title": "Top processes — latest snapshot (change the time range to look at any past moment)", "id": 40,
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 33 },
+      "type": "bargauge", "title": "Top 10 by CPU — latest snapshot", "id": 41,
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 33 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "description": "htop's process meters. Instant query, so it evaluates at the END of the dashboard time range — shift the range and these bars show that moment, not now.",
+      "targets": [ { "refId": "A", "expr": "topk(10, last_over_time({job=\"systemd-journal\", vm=~\"$vm\", service_name=\"perceptor-ps-snapshot.service\"} | logfmt | unwrap cpu [3m]) by (pid, user, comm))", "legendFormat": "{{comm}} ({{pid}})", "queryType": "instant", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "decimals": 1,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 25 }, { "color": "red", "value": 60 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true, "minVizHeight": 8, "minVizWidth": 0, "valueMode": "color", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "bargauge", "title": "Top 10 by memory (RSS) — latest snapshot", "id": 42,
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 33 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "description": "Resident set size per process. Ranked independently of CPU — the biggest memory user is rarely the busiest one.",
+      "targets": [ { "refId": "A", "expr": "topk(10, last_over_time({job=\"systemd-journal\", vm=~\"$vm\", service_name=\"perceptor-ps-snapshot.service\"} | logfmt | unwrap rss_kb [3m]) by (pid, user, comm)) * 1024", "legendFormat": "{{comm}} ({{pid}})", "queryType": "instant", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "color": { "mode": "continuous-BlPu" } }, "overrides": [] },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true, "minVizHeight": 8, "minVizWidth": 0, "valueMode": "color", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "table", "title": "Top processes — full detail (PID, user, command, CPU, memory)", "id": 40,
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 43 },
       "datasource": { "type": "loki", "uid": "${loki}" },
       "description": "Needs perceptor-ps-snapshot.timer on the VM (agent repo: `make snapshot`). Parses the logfmt snapshot back into a real table. It is a LOG at rest, not metrics — per-process metrics are a cardinality bomb (a series per PID, and PIDs churn) — but `unwrap` turns it into a sortable vector at QUERY time, which costs no stored cardinality. Query B groups by (pid) only, so the join doesn't produce duplicate user/comm columns. [3m] covers the 2m timer plus jitter; last_over_time then takes each process's most recent sample.",
       "targets": [
