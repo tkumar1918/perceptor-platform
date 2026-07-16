@@ -194,12 +194,30 @@
     { "type": "row", "title": "Process snapshot (point-in-time, from journald)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 }, "collapsed": false, "id": 104 },
 
     {
-      "type": "logs", "title": "Top processes by CPU — snapshot every 2m (scroll back to any point in time)", "id": 40,
+      "type": "table", "title": "Top processes — latest snapshot (change the time range to look at any past moment)", "id": 40,
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 33 },
       "datasource": { "type": "loki", "uid": "${loki}" },
-      "description": "Needs perceptor-ps-snapshot.timer on the VM. This is a LOG, not metrics, on purpose: per-process metrics are a cardinality bomb (a series per PID, and PIDs churn), whereas ~20 logfmt lines every 2m is flat cardinality and still answers 'what was hot at 14:05?'. Emitted rank 20->01 so this newest-first panel renders each snapshot hottest-first. Use `| logfmt` to filter, e.g. `| logfmt | cpu > 50`.",
-      "targets": [ { "refId": "A", "expr": "{job=\"systemd-journal\", vm=~\"$vm\", service_name=\"perceptor-ps-snapshot.service\"}" } ],
-      "options": { "showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending", "prettifyLogMessage": false }
+      "description": "Needs perceptor-ps-snapshot.timer on the VM (agent repo: `make snapshot`). Parses the logfmt snapshot back into a real table. It is a LOG at rest, not metrics — per-process metrics are a cardinality bomb (a series per PID, and PIDs churn) — but `unwrap` turns it into a sortable vector at QUERY time, which costs no stored cardinality. Query B groups by (pid) only, so the join doesn't produce duplicate user/comm columns. [3m] covers the 2m timer plus jitter; last_over_time then takes each process's most recent sample.",
+      "targets": [
+        { "refId": "A", "expr": "topk(20, last_over_time({job=\"systemd-journal\", vm=~\"$vm\", service_name=\"perceptor-ps-snapshot.service\"} | logfmt | unwrap cpu [3m]) by (pid, user, comm))", "queryType": "instant", "instant": true },
+        { "refId": "B", "expr": "last_over_time({job=\"systemd-journal\", vm=~\"$vm\", service_name=\"perceptor-ps-snapshot.service\"} | logfmt | unwrap rss_kb [3m]) by (pid) * 1024", "queryType": "instant", "instant": true }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "pid", "mode": "outer" } },
+        { "id": "organize", "options": {
+            "excludeByName": { "Time": true, "Time 1": true, "Time 2": true },
+            "renameByName": { "pid": "PID", "user": "User", "comm": "Command", "Value #A": "CPU %", "Value #B": "Memory (RSS)" }
+        } },
+        { "id": "sortBy", "options": { "fields": {}, "sort": [ { "field": "CPU %", "desc": true } ] } }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "CPU %" }, "properties": [ { "id": "unit", "value": "percent" }, { "id": "decimals", "value": 1 }, { "id": "min", "value": 0 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] },
+          { "matcher": { "id": "byName", "options": "Memory (RSS)" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "min", "value": 0 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } } ] }
+        ]
+      },
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } }
     }
   ]
 }
