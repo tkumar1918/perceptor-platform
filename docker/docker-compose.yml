@@ -335,6 +335,7 @@ services:
       - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro  # cadvisor resolves container names/images via containerd
       - /var/lib/docker/:/var/lib/docker/:ro
       - /var/log/journal:/var/log/journal:ro
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro  # node_exporter's systemd collector talks to systemd over D-Bus; without this it emits nothing
       - /etc/machine-id:/etc/machine-id:ro
       - alloy-data:/var/lib/alloy/data
     depends_on:

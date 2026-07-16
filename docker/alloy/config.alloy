@@ -23,6 +23,14 @@ prometheus.exporter.unix "host" {
 	procfs_path = "/host/proc"
 	sysfs_path  = "/host/sys"
 
+	// Two opt-in node_exporter collectors (off by default) — kept in step with the
+	// project-VM agent so the infra dashboards mean the same thing on every box:
+	//   systemd   — per-unit state (failed/activating/deactivating). Read over the
+	//               host's D-Bus socket, so it REQUIRES the /run/dbus/system_bus_socket
+	//               mount in compose; without it the collector loads but emits nothing.
+	//   processes — aggregate process/thread counts from /host/proc.
+	enable_collectors = ["systemd", "processes"]
+
 	filesystem {
 		mount_points_exclude = "^/(dev|proc|sys|host/proc|host/sys|run|var/lib/docker/.+)($|/)"
 		fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|mqueue|nsfs|overlay|proc|procfs|pstore|securityfs|selinuxfs|squashfs|sysfs|tmpfs|tracefs)$"
