@@ -1,0 +1,41 @@
+# ============================================================================
+# Alert DELIVERY — copy to contact-points.yaml, fill in ONE receiver, `make reload`.
+#
+# Until this exists, every alert rule in this directory FIRES SILENTLY: the
+# disk-full guards, the agent dead-man switches — all of them evaluate, turn
+# red in the UI, and page no one. Grafana routes firing alerts to the default
+# contact point, which out of the box is an email receiver with no SMTP
+# configured (a black hole).
+#
+# contact-points.yaml is gitignored-adjacent by convention (it holds a webhook
+# URL — treat it like a secret). This .example file is the committed template.
+# ============================================================================
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: platform-ops
+    receivers:
+      # Pick ONE, delete the other.
+
+      # Slack incoming webhook (or anything Slack-compatible — Mattermost etc.)
+      - uid: cp-platform-slack
+        type: slack
+        settings:
+          url: https://hooks.slack.com/services/XXX/YYY/ZZZ
+          title: '{{ template "default.title" . }}'
+
+      # Plain webhook (PagerDuty Events, Opsgenie, a small internal relay, ...)
+      # - uid: cp-platform-webhook
+      #   type: webhook
+      #   settings:
+      #     url: https://example.com/alert-hook
+
+policies:
+  - orgId: 1
+    receiver: platform-ops
+    # Route EVERYTHING in org 1 to the receiver above; group repeats sanely.
+    group_by: ["alertname"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h

@@ -12,18 +12,29 @@ name: perceptor-platform
 
 # Single S3-generic env block shared by every service that touches storage.
 # Switching from SeaweedFS to AWS S3 / R2 / B2 = change these values in .env only.
+#
+# The :?err guards are load-bearing: compose interpolates ${VARS} from the
+# --env-file at PARSE time, and a bare `docker compose up` (no --env-file, or
+# run from the wrong directory) silently resolves them all to empty — which
+# recreates mimir/loki/tempo with no storage config and crash-loops the whole
+# backend (this exact mistake caused a real outage). With :? the wrong
+# invocation dies loudly before touching any container.
+#
+# The CREDENTIAL pair deliberately has NO guard and defaults to empty: on AWS,
+# empty creds fall through to the SDK default chain (EC2 instance role) — the
+# preferred auth. See Profile C in .env.example.
 x-s3-env: &s3-env
-  S3_ENDPOINT: ${S3_ENDPOINT}
-  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
-  S3_REGION: ${S3_REGION}
-  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID}
-  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY}
-  S3_INSECURE: ${S3_INSECURE}
-  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE}
-  S3_BUCKET_LOOKUP: ${S3_BUCKET_LOOKUP}
-  BUCKET_MIMIR: ${BUCKET_MIMIR}
-  BUCKET_LOKI: ${BUCKET_LOKI}
-  BUCKET_TEMPO: ${BUCKET_TEMPO}
+  S3_ENDPOINT: ${S3_ENDPOINT:?S3_* not loaded — run via `make` (it passes --env-file .env from the repo root)}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:?S3_* not loaded — run via `make`}
+  S3_REGION: ${S3_REGION:?S3_* not loaded — run via `make`}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+  S3_INSECURE: ${S3_INSECURE:-false}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+  S3_BUCKET_LOOKUP: ${S3_BUCKET_LOOKUP:-auto}
+  BUCKET_MIMIR: ${BUCKET_MIMIR:?S3_* not loaded — run via `make`}
+  BUCKET_LOKI: ${BUCKET_LOKI:?S3_* not loaded — run via `make`}
+  BUCKET_TEMPO: ${BUCKET_TEMPO:?S3_* not loaded — run via `make`}
 
 # Bounded container-log rotation. Without this, the json-file driver grows the
 # per-container logs under /var/lib/docker forever and can fill the instance
@@ -69,9 +80,15 @@ services:
     labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
+    mem_limit: 256m
+    # service_started, NOT service_healthy — deliberately. The old chain
+    # (caddy -> collector healthy -> tempo healthy) meant one sick backend at
+    # boot kept Caddy DOWN, killing ingest for every signal of every tenant.
+    # A Caddy that 502s while the collector warms up is strictly better than
+    # no edge at all: exporters retry, and the collector's queue absorbs.
     depends_on:
       otel-collector:
-        condition: service_healthy
+        condition: service_started
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -98,20 +115,30 @@ services:
     labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
+    # Pairs with memory_limiter's explicit limit_mib in collector-config.yaml:
+    # the limiter drops data at ~600MiB, this cgroup cap is the hard backstop.
+    # Without a container limit, limit_percentage read HOST memory — letting the
+    # collector balloon toward 80% of the box before "protecting" anything.
+    mem_limit: 768m
     command: ["--config=/etc/otel-collector-config.yaml"]
     volumes:
       - ./otel/collector-config.yaml:/etc/otel-collector-config.yaml:ro
       - otel-queue:/var/lib/otelcol/queue
     healthcheck:
-      test: ["CMD", "/otelcol-contrib", "components"]   # process-up smoke check
+      test: ["CMD", "/otelcol-contrib", "components"]   # process-up smoke check ONLY — a subcommand, exits 0 even if the serving pipeline is wedged (image is distroless; :13133 can't be probed). Nothing gates on it anymore.
       interval: 10s
       timeout: 5s
       retries: 5
+    # All service_started: the per-exporter retry + persistent queue exist
+    # precisely so a slow/sick backend doesn't block the pipeline — gating the
+    # collector's own startup on tempo's health defeated that (a tempo that
+    # couldn't go ready kept the collector, and with it Caddy, from starting:
+    # total ingest outage caused by the least-critical backend).
     depends_on:
       init-perms: { condition: service_completed_successfully }
       mimir: { condition: service_started }
       loki:  { condition: service_started }
-      tempo:   { condition: service_healthy }
+      tempo: { condition: service_started }
     networks: [obs]
 
   # ===========================================================================
@@ -204,6 +231,7 @@ services:
     labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
+    mem_limit: 2g
     command: ["-config.file=/etc/mimir/mimir.yaml", "-config.expand-env=true"]
     environment: *s3-env
     volumes:
@@ -225,6 +253,7 @@ services:
     labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
+    mem_limit: 1536m
     command: ["-config.file=/etc/loki/loki.yaml", "-config.expand-env=true"]
     environment: *s3-env
     volumes:
@@ -245,6 +274,7 @@ services:
     labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
+    mem_limit: 1g
     command: ["-config.file=/etc/tempo/tempo.yaml", "-config.expand-env=true"]
     environment: *s3-env
     volumes:
@@ -269,14 +299,15 @@ services:
     labels: *perceptor-monitored
     logging: *logging
     restart: unless-stopped
+    mem_limit: 768m
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_ORG_CREATE: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning
-      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana-data:/var/lib/grafana
     ports:
       # Direct UI access. With a TLS edge Grafana is served via its vhost on 443,

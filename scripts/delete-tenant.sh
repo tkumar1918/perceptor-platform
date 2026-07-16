@@ -35,7 +35,9 @@ YES="${YES:-}"
 GRAFANA_URL="${GRAFANA_URL:-http://localhost:3001}"
 ADMIN_USER="${GRAFANA_ADMIN_USER:-admin}"
 ADMIN_PASS="${GRAFANA_ADMIN_PASSWORD:-}"
-COMPOSE=(docker compose -f "${ROOT}/docker/docker-compose.yml")
+# --env-file matches the Makefile: the compose file's ${VAR:?} guards reject
+# any invocation that doesn't load .env, so this array must carry it too.
+COMPOSE=(docker compose -f "${ROOT}/docker/docker-compose.yml" --env-file "${ROOT}/.env")
 PYBIN="${ROOT}/.venv/bin/python"; [ -x "$PYBIN" ] || PYBIN=python3
 
 cd "$ROOT"
@@ -146,7 +148,11 @@ fi
 
 # --- 8. Optional: irreversibly purge the tenant's S3 data ----------------------
 if [ -n "$PURGE_DATA" ]; then
-  : "${S3_ACCESS_KEY_ID:?PURGE_DATA needs S3 creds from .env}"
+  # Only the buckets are required. The CREDENTIALS may legitimately be empty:
+  # on AWS the stack authenticates via the EC2 instance role (Profile C in
+  # .env.example), and the CLI below inherits the same default-chain fallback.
+  # Requiring S3_ACCESS_KEY_ID here silently broke purge on every role-auth
+  # deployment.
   : "${BUCKET_MIMIR:?}"; : "${BUCKET_LOKI:?}"; : "${BUCKET_TEMPO:?}"
   echo
   echo "!!! PURGE_DATA: about to IRREVERSIBLY delete all S3 objects for '${TENANT}':"
@@ -160,12 +166,27 @@ if [ -n "$PURGE_DATA" ]; then
   fi
   ep=(); [ -n "${S3_ENDPOINT_URL:-}" ] && ep=(--endpoint-url "$S3_ENDPOINT_URL")
   ssl=(); [ "${S3_INSECURE:-false}" = "true" ] && ssl=(--no-verify-ssl)   # MinIO/http endpoints
-  awsenv=(AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="$S3_SECRET_ACCESS_KEY" AWS_REGION="${S3_REGION:-us-east-1}")
-  rm_prefix() { env "${awsenv[@]}" aws s3 rm "$1" --recursive "${ep[@]}" "${ssl[@]}"; }
+  # Export creds ONLY when non-empty: an empty-but-set AWS_ACCESS_KEY_ID makes
+  # some SDK versions abort instead of falling through to the instance role.
+  awsenv=(AWS_REGION="${S3_REGION:-us-east-1}")
+  if [ -n "${S3_ACCESS_KEY_ID:-}" ]; then
+    awsenv+=(AWS_ACCESS_KEY_ID="$S3_ACCESS_KEY_ID" AWS_SECRET_ACCESS_KEY="${S3_SECRET_ACCESS_KEY:-}")
+  fi
+  if command -v aws >/dev/null 2>&1; then
+    aws_run() { env "${awsenv[@]}" aws "$@"; }
+  else
+    # No aws CLI on this host — run the pinned image instead (same one s3-init
+    # uses). With no creds passed, the container reaches the EC2 instance role
+    # via IMDS exactly like the mimir/loki containers already do.
+    denv=(); for kv in "${awsenv[@]}"; do denv+=(-e "$kv"); done
+    aws_run() { docker run --rm "${denv[@]}" amazon/aws-cli:2.31.18 "$@"; }
+    echo "  (aws CLI not installed — using dockerized amazon/aws-cli)"
+  fi
+  rm_prefix() { aws_run s3 rm "$1" --recursive "${ep[@]}" "${ssl[@]}"; }
   echo "  mimir…";       rm_prefix "s3://${BUCKET_MIMIR}/${TENANT}/" || true
   echo "  tempo…";       rm_prefix "s3://${BUCKET_TEMPO}/${TENANT}/" || true
   echo "  loki chunks…"; rm_prefix "s3://${BUCKET_LOKI}/${TENANT}/"  || true
-  echo "  loki index…";  env "${awsenv[@]}" aws s3 rm "s3://${BUCKET_LOKI}/index/" \
+  echo "  loki index…";  aws_run s3 rm "s3://${BUCKET_LOKI}/index/" \
        --recursive --exclude "*" --include "*/${TENANT}/*" "${ep[@]}" "${ssl[@]}" || true
   echo "S3 purge complete."
 else

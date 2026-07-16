@@ -202,6 +202,29 @@ Generation is idempotent (an existing token is never silently rotated). Back up
 `tenants.secrets.yaml` or source it from a secrets manager / SOPS-age — losing it
 means re-issuing every project's token. To rotate one, delete its line and re-render.
 
+## Security note on Grafana roles — project users are Editor, NEVER org Admin
+
+Tenant **read** isolation rests entirely on the `X-Scope-OrgID` header pinned
+inside each org's provisioned datasources. The backends themselves accept any
+org id from anything on the internal network — the header IS the boundary.
+
+A Grafana **org Admin can create datasources**. So a project user holding org
+Admin in *their own* org can add one pointing at `http://mimir:9009/prometheus`
+with any other tenant's id in the header — and read that tenant's data. Nothing
+logs it, nothing blocks it.
+
+The invariant, therefore:
+
+| Who | Role |
+|---|---|
+| platform operator (the `admin` account) | org Admin everywhere |
+| project users | **Editor at most**, in their own org only |
+
+`make bootstrap-orgs` audits this on every run and prints a `⚠ SECURITY`
+warning naming any project-org Admin that isn't the platform account. Treat
+that warning as an incident, not a nag: demote the user (org →
+Administration → Users), then assume the tenant list is known to them.
+
 ## Managing old data
 
 - **Retention is per project, and it's *backend* retention — not an S3 rule.**

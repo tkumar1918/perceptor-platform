@@ -85,6 +85,15 @@ def load():
     for t in tenants:
         if not t.get("id"):
             sys.exit(f"tenant {t.get('id', '?')} is missing required 'id'")
+        # The id is interpolated raw into the Caddyfile (matcher name @<id>,
+        # X-Scope-OrgID header), S3 object prefixes, and bootstrap filenames.
+        # A space or quote in it renders an unparseable Caddyfile — which the
+        # next reload happily restarts Caddy against, taking the ENTIRE ingest
+        # edge down. Same slug rule as `group` below.
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", t["id"]):
+            sys.exit(f"tenant id '{t['id']}' must be a lowercase slug "
+                     "([a-z0-9-], no leading '-') — it becomes a Caddy matcher "
+                     "name, an X-Scope-OrgID value, and an S3 prefix")
         if t["id"] in seen_ids:
             sys.exit(f"duplicate tenant id: {t['id']}")
         name = t.get("display_name", t["id"])
@@ -113,6 +122,9 @@ def load():
             sys.exit("reserved entry is missing required 'id'")
         if not r["id"].startswith("_"):
             sys.exit(f"reserved tenant id must start with '_': {r['id']}")
+        if not re.fullmatch(r"_[a-z0-9][a-z0-9-]*", r["id"]):
+            sys.exit(f"reserved tenant id '{r['id']}' must be '_' + lowercase slug "
+                     "([a-z0-9-]) — same Caddyfile/S3 interpolation as project ids")
         if r["id"] in seen_ids:
             sys.exit(f"duplicate tenant id: {r['id']}")
         if r.get("org_id"):
@@ -161,11 +173,27 @@ def load():
     return tenants, reserved
 
 
-def write(path, content):
+def write(path, content, mode=None):
+    """Atomic write: temp file + os.replace, so no consumer ever sees a torn file.
+
+    This matters because two of the outputs are HOT-RELOADED while we write:
+    mimir/loki re-read overrides.yaml on a timer, and a partial-but-valid YAML
+    (half the tenants) would apply as-is — silently dropping the other half's
+    limits until the next render. os.replace is atomic on POSIX, so readers get
+    either the old file or the new one, never a mix. Also means a crashed render
+    can't leave a truncated Caddyfile for the next reload to restart Caddy onto.
+
+    mode: chmod applied before the rename (e.g. 0o600 for the Caddyfile, which
+    embeds every tenant's bearer token — never leave it world-readable).
+    """
     full = os.path.join(DOCKER, path)
     os.makedirs(os.path.dirname(full), exist_ok=True)
-    with open(full, "w") as f:
+    tmp = full + ".tmp"
+    with open(tmp, "w") as f:
         f.write(content)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    os.replace(tmp, full)
     print(f"  wrote docker/{path}")
 
 
@@ -391,6 +419,12 @@ def render_caddy(tenants):
            # --- Ingest edge vhost (token -> tenant). Same logic on :4318 or a host. ---
            f"{edge_addr} {{\n"
            "\tlog                        # enable access logging; log_name (below) routes each request to a sink\n\n"
+           "\t# Cap request bodies. OTLP batches are well under 5MB in practice; without\n"
+           "\t# a cap, one leaked token permits arbitrarily large POSTs straight into the\n"
+           "\t# collector's memory before any per-tenant backend limit can push back.\n"
+           "\trequest_body {\n"
+           "\t\tmax_size 20MB\n"
+           "\t}\n\n"
            "\t# OTLP/gRPC shares this port with HTTP (over TLS it's h2; distinguished by\n"
            "\t# content-type). Each tenant routes @grpc to the collector's gRPC listener.\n"
            "\t@grpc header Content-Type application/grpc*\n\n"
@@ -410,7 +444,9 @@ def render_caddy(tenants):
                 "\treverse_proxy grafana:3000\n"
                 "}\n")
 
-    write("caddy/Caddyfile", out)
+    # 0o600: the Caddyfile embeds every tenant's bearer token. Caddy reads it
+    # through the bind-mount as root, so tightening costs nothing functionally.
+    write("caddy/Caddyfile", out, mode=0o600)
 
 
 def render_mimir(tenants):
@@ -544,6 +580,60 @@ def render_infra_datasources(reserved):
     write("grafana/provisioning/datasources/infra.yaml", "".join(lines))
 
 
+def render_group_alerts(reserved):
+    # One dead-man's-switch alert per reserved GROUP tenant (admin org). The
+    # hand-written infra-alerts.yaml only watches the CENTRAL box's agent
+    # (_infra): a remote/shared VM's agent dying would silently flatline its
+    # _infra-<group> tenant and nobody would know until a human opened a
+    # dashboard. Same shape as infra_agent_down there: healthy agent ->
+    # count(node_load1) >= 1; dead -> series goes stale -> vector(0) arm -> fires.
+    # NOTE: like every alert here, delivery needs a contact point configured
+    # (see contact-points.yaml.example) — without one, rules fire silently.
+    rules = []
+    for r in reserved:
+        rid = r["id"]
+        if rid == "_infra":
+            continue   # covered by infra_agent_down in infra-alerts.yaml
+        suffix, label = reserved_ds_ident(rid)
+        uid = f"agent_down_{suffix}"[:40]   # Grafana caps rule uids at 40 chars
+        rules.append(f"""
+      - uid: {uid}
+        title: "VM agent down for group '{label}' (no host metrics in {rid})"
+        condition: A
+        for: 5m
+        noDataState: Alerting
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: {{ from: 300, to: 0 }}
+            datasourceUid: mimir-{suffix}
+            model:
+              refId: A
+              instant: true
+              expr: (count(node_load1) OR on() vector(0)) < 1
+        annotations:
+          summary: "No host metrics from the '{label}' group's VM agent"
+          description: "node_* metrics stopped arriving in {rid} — the Alloy agent on that VM (or its path through the edge) is down. Every project sharing that VM is blind to its host health until this recovers."
+        labels:
+          severity: critical
+""")
+    if not rules:
+        # No groups defined: emit a valid empty provisioning file rather than
+        # leaving a stale one from a previous render lying around.
+        write("grafana/provisioning/alerting/group-agent-alerts.yaml",
+              GEN + "apiVersion: 1\n")
+        return
+    out = (GEN +
+           "apiVersion: 1\n\n"
+           "groups:\n"
+           "  - orgId: 1\n"
+           "    name: Group VM agents\n"
+           "    folder: Infrastructure\n"
+           "    interval: 1m\n"
+           "    rules:\n" + "".join(rules))
+    write("grafana/provisioning/alerting/group-agent-alerts.yaml", out)
+
+
 def render_dashboards_provider(tenants):
     # Org 1 (platform/admin) only — see render_datasources for why per-org
     # providers can't be file-provisioned. Per-org dashboards (if any) are
@@ -627,6 +717,7 @@ def main():
     render_tempo(ingest)
     render_datasources(tenants)    # per-org datasources: projects only (+ group infra pair)
     render_infra_datasources(reserved)   # admin-org (org 1) view of every reserved tenant
+    render_group_alerts(reserved)        # dead-man's switch per group VM agent
     render_dashboards_provider(tenants)
     render_orgs(tenants)           # Grafana orgs: projects only (reserved use org 1)
     render_collector_attrs()       # dropped-resource-attributes.yaml -> collector-config.yaml

@@ -177,4 +177,39 @@ done < "$ORGS_FILE"
 
 # Restore the admin session to org 1.
 curl "${auth[@]}" -o /dev/null -X POST "${GRAFANA_URL}/api/user/using/1" || true
+
+# ── Security audit: warn about project users holding org Admin ──────────────
+# Tenant READ isolation rests entirely on the X-Scope-OrgID header pinned in
+# each org's provisioned datasources — the backends accept any org id from
+# anything on the internal network. A Grafana org ADMIN can create a NEW
+# datasource with any header value, i.e. read any other tenant's data. So the
+# invariant is: project users are Editor at most; only the platform account
+# holds org Admin. This audit makes a violation visible on every run.
+echo
+echo "Auditing org roles (project users must be Editor at most)..."
+audit_warned=0
+while IFS='|' read -r org_id id group display_name; do
+  [[ -z "$id" ]] && continue
+  enc=$(python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' "$display_name")
+  oid=$(curl -sS -u "${ADMIN_USER}:${ADMIN_PASS}" "${GRAFANA_URL}/api/orgs/name/${enc}" 2>/dev/null \
+        | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("id",""))
+except Exception: print("")')
+  [[ -z "$oid" ]] && continue
+  rogue=$(curl -sS -u "${ADMIN_USER}:${ADMIN_PASS}" "${GRAFANA_URL}/api/orgs/${oid}/users" 2>/dev/null \
+        | ADMIN_USER="$ADMIN_USER" python3 -c 'import json,sys,os
+admin=os.environ.get("ADMIN_USER","admin")
+try: users=json.load(sys.stdin)
+except Exception: users=[]
+print(",".join(u.get("login","?") for u in users
+               if u.get("role")=="Admin" and u.get("login")!=admin))')
+  if [[ -n "$rogue" ]]; then
+    echo "  ⚠ SECURITY: org '${display_name}' (${oid}) has non-platform org Admin(s): ${rogue}"
+    echo "     An org Admin can add a datasource with any X-Scope-OrgID and read OTHER tenants' data."
+    echo "     Demote to Editor:  Grafana -> org '${display_name}' -> Administration -> Users."
+    audit_warned=1
+  fi
+done < "$ORGS_FILE"
+[[ "$audit_warned" == 0 ]] && echo "  ok — no project-org Admins besides '${ADMIN_USER}'."
+
 echo "Done. Each project now has an isolated org with tenant-pinned datasources."

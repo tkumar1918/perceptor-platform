@@ -1,10 +1,13 @@
 # Perceptor Platform - Operator entrypoints.
-COMPOSE := docker compose -f docker/docker-compose.yml
+# --env-file is part of COMPOSE itself so EVERY target interpolates the S3_*
+# vars — the compose file's ${VAR:?} guards fail any invocation that skips it
+# (that mistake once recreated mimir/loki with empty storage config).
+COMPOSE := docker compose -f docker/docker-compose.yml --env-file .env
 PY      := .venv/bin/python
 PIP     := .venv/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help venv render up down reload bootstrap-orgs delete-tenant logs ps fmt-check
+.PHONY: help venv render up down reload bootstrap-orgs delete-tenant logs ps fmt-check fix-perms
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -17,16 +20,24 @@ venv: ## Create local venv with PyYAML (for the renderer)
 render: venv ## Regenerate all per-tenant config from tenants.yaml
 	@set -a; [ -f .env ] && . ./.env; set +a; $(PY) scripts/render.py   # .env feeds EDGE_HOST/GRAFANA_HOST/ACME_EMAIL into the Caddyfile
 
-up: ## Start the whole stack (after `make render`)
+# .env and the rendered Caddyfile both hold secrets (Grafana admin password;
+# every tenant's ingest token). Self-heal their modes on every apply so a
+# loose copy/edit can't leave them world-readable.
+fix-perms:
+	@chmod 600 .env 2>/dev/null || true
+	@chmod 600 docker/caddy/Caddyfile 2>/dev/null || true
+	@chmod 600 tenants.secrets.yaml 2>/dev/null || true
+
+up: fix-perms ## Start the whole stack (after `make render`)
 	@test -f .env || { echo "Create .env from .env.example first"; exit 1; }
-	@$(COMPOSE) --env-file .env up -d
+	@$(COMPOSE) up -d
 
 down: ## Stop the stack (keeps volumes/data)
 	@$(COMPOSE) down
 
-reload: render ## Re-render config, apply compose changes, restart, and re-import dashboards into every project org
-	@$(COMPOSE) --env-file .env up -d                        # create/recreate any new or changed services (e.g. alloy)
-	@$(COMPOSE) --env-file .env restart caddy otel-collector mimir loki tempo grafana alloy  # re-read rendered/provisioned config
+reload: render fix-perms ## Re-render config, apply compose changes, restart, and re-import dashboards into every project org
+	@$(COMPOSE) up -d                        # create/recreate any new or changed services (e.g. alloy)
+	@$(COMPOSE) restart caddy otel-collector mimir loki tempo grafana alloy  # re-read rendered/provisioned config
 	@$(MAKE) --no-print-directory bootstrap-orgs             # dashboards are config too — see why this is NOT optional, below
 
 # Why reload must end in bootstrap-orgs: only the ADMIN org (1) is file-provisioned

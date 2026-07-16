@@ -33,10 +33,15 @@ receivers:
 
 processors:
   # MUST be first: drops data instead of OOM-killing the collector under load.
+  # Explicit MiB, NOT limit_percentage: with no cgroup awareness a percentage
+  # reads the HOST's memory, so on an 8GB box "80%" allowed ~6.4GB of growth
+  # before limiting anything — an OOM-cascade waiting to happen. 600MiB sits
+  # under the service's 768m mem_limit in docker-compose.yml (keep them paired:
+  # limiter soft-drops first, cgroup hard-kills as the backstop).
   memory_limiter:
     check_interval: 1s
-    limit_percentage: 80
-    spike_limit_percentage: 25
+    limit_mib: 600
+    spike_limit_mib: 150
 
   # metadata_keys keeps tenants in SEPARATE batches — never merge across tenants.
   batch:
