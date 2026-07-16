@@ -66,15 +66,42 @@
       "type": "stat", "title": "Containers reporting", "id": 1,
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "count(count by (container) (container_last_seen{vm=~\"$vm\", container=~\"$container\"}))", "instant": true } ],
+      "targets": [ { "refId": "A", "expr": "count(count by (container) (container_last_seen{vm=~\"$vm\", container=~\"$container\", container!=\"\"})) OR on() vector(0)", "instant": true } ],
+      "description": "Containers cadvisor has EVER reported in this instant. 0 (not 'No data') means nothing is reporting right now.",
       "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
     },
     {
+      "type": "stat", "title": "Running (last seen ≤ 2m)", "id": 2,
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "count(count by (container) (time() - container_last_seen{vm=~\"$vm\", container=~\"$container\", container!=\"\"} < 120)) OR on() vector(0)", "instant": true } ],
+      "description": "Containers seen within the last 2 minutes. If this is 0 while 'Containers reporting' is not, the agent has stopped scraping.",
+      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+    {
+      "type": "stat", "title": "Total CPU (cores)", "id": 3,
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "sum(rate(container_cpu_usage_seconds_total{vm=~\"$vm\", container=~\"$container\", container!=\"\"}[5m]))", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 2, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+    {
+      "type": "stat", "title": "Total memory (working set)", "id": 4,
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "sum(container_memory_working_set_bytes{vm=~\"$vm\", container=~\"$container\", container!=\"\"})", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+
+    {
       "type": "timeseries", "title": "Container CPU (cores)", "id": 10,
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "sum by (vm, container) (rate(container_cpu_usage_seconds_total{vm=~\"$vm\", container=~\"$container\"}[5m]))", "legendFormat": "{{vm}} / {{container}}" } ],
+      "targets": [ { "refId": "A", "expr": "sum by (vm, container) (rate(container_cpu_usage_seconds_total{vm=~\"$vm\", container=~\"$container\", container!=\"\"}[5m]))", "legendFormat": "{{vm}} / {{container}}" } ],
       "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
     },
@@ -82,7 +109,7 @@
       "type": "timeseries", "title": "Container memory (working set)", "id": 11,
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
       "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "sum by (vm, container) (container_memory_working_set_bytes{vm=~\"$vm\", container=~\"$container\"})", "legendFormat": "{{vm}} / {{container}}" } ],
+      "targets": [ { "refId": "A", "expr": "sum by (vm, container) (container_memory_working_set_bytes{vm=~\"$vm\", container=~\"$container\", container!=\"\"})", "legendFormat": "{{vm}} / {{container}}" } ],
       "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
       "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["last", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
     },
@@ -90,7 +117,7 @@
       "type": "table", "title": "Running containers (last seen ≤ 2m)", "id": 12,
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 13 },
       "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "count by (vm, container) (time() - container_last_seen{vm=~\"$vm\", container=~\"$container\"} < 120)", "instant": true, "format": "table" } ],
+      "targets": [ { "refId": "A", "expr": "count by (vm, container) (time() - container_last_seen{vm=~\"$vm\", container=~\"$container\", container!=\"\"} < 120)", "instant": true, "format": "table" } ],
       "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true }, "renameByName": { "vm": "VM", "container": "Container" } } } ],
       "options": { "showHeader": true }
     },
@@ -101,7 +128,8 @@
       "type": "logs", "title": "Container logs (job=docker, opted-in containers only)", "id": 20,
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 22 },
       "datasource": { "type": "loki", "uid": "${loki}" },
-      "targets": [ { "refId": "A", "expr": "{telemetry_source=\"infra\", vm=~\"$vm\", job=\"docker\", container=~\"$container\"}" } ],
+      "description": "`container` is NOT a Loki stream label on the OTLP agent path (only job/service_name/telemetry_source/vm are) — it arrives as structured metadata. So it MUST be filtered with a `|` label-filter, not inside the {} stream selector, or selecting a container silently matches zero lines. A label filter reads stream labels AND structured metadata, so this works on both the central (loki.write) and remote (OTLP) agents.",
+      "targets": [ { "refId": "A", "expr": "{telemetry_source=\"infra\", vm=~\"$vm\", job=\"docker\"} | container=~\"$container\"" } ],
       "options": { "showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" }
     }
   ]

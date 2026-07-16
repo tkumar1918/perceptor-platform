@@ -146,9 +146,10 @@
 
     {
       "type": "stat", "title": "Failed units", "id": 30,
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 32 },
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 32 },
       "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "count(node_systemd_unit_state{vm=~\"$vm\", state=\"failed\"} == 1) OR on() vector(0)", "instant": true } ],
+      "description": "0 = genuinely no failed units. 'No data' = the systemd collector isn't reporting on the selected VM (needs enable_collectors=[\"systemd\"] AND the /run/dbus/system_bus_socket mount). The fallback is `count(all units) * 0` rather than `vector(0)` on purpose: vector(0) would paint a healthy-looking 0 even when the metric doesn't exist at all, hiding a blind agent.",
+      "targets": [ { "refId": "A", "expr": "count(node_systemd_unit_state{vm=~\"$vm\", state=\"failed\"} == 1) OR on() (count(node_systemd_unit_state{vm=~\"$vm\"}) * 0)", "instant": true } ],
       "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
     },
