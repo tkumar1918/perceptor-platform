@@ -1,0 +1,205 @@
+{
+  "uid": "perceptor-infra-htop",
+  "id": null,
+  "title": "Infrastructure — Host at a glance (htop-style)",
+  "tags": ["perceptor", "infra"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "description": "htop-style single-host view: per-core CPU meters, memory/swap meters, task+load summary, and per-container usage. ONE VM at a time (htop is a per-machine tool), so $vm is single-select. Adds NO new series — every panel reads metrics the agent already ships. A real per-process table (PID/command) is deliberately NOT here: it needs process-exporter, which adds a series per process group per VM. For 'what is hot' on a Dockerised box, the per-container table at the bottom is the low-cardinality answer.",
+  "templating": {
+    "list": [
+      {
+        "name": "mimir",
+        "label": "Metrics source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "loki",
+        "label": "Logs source",
+        "type": "datasource",
+        "query": "loki",
+        "current": {},
+        "hide": 0,
+        "refresh": 1
+      },
+      {
+        "name": "vm",
+        "label": "VM",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${mimir}" },
+        "query": "label_values(node_uname_info, vm)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    { "type": "row", "title": "Meters", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false, "id": 100 },
+
+    {
+      "type": "bargauge", "title": "CPU per core", "id": 1,
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "description": "Busy % per core = 1 - idle. This is htop's core meter row.",
+      "targets": [ { "refId": "A", "expr": "100 * (1 - avg by (cpu) (rate(node_cpu_seconds_total{vm=\"$vm\", mode=\"idle\"}[$__rate_interval])))", "legendFormat": "cpu {{cpu}}", "instant": true } ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent", "min": 0, "max": 100, "decimals": 0,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 60 }, { "color": "red", "value": 85 } ] }
+        },
+        "overrides": []
+      },
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "showUnfilled": true, "minVizHeight": 10, "minVizWidth": 0, "valueMode": "color", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+    {
+      "type": "bargauge", "title": "Memory & swap", "id": 2,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "description": "htop's Mem/Swp meters. 'Used' excludes cache/buffers (MemTotal - MemAvailable) — the number that actually matters; cache is reclaimable.",
+      "targets": [
+        { "refId": "A", "expr": "node_memory_MemTotal_bytes{vm=\"$vm\"} - node_memory_MemAvailable_bytes{vm=\"$vm\"}", "legendFormat": "Used", "instant": true },
+        { "refId": "B", "expr": "node_memory_Cached_bytes{vm=\"$vm\"}", "legendFormat": "Cached", "instant": true },
+        { "refId": "C", "expr": "node_memory_Buffers_bytes{vm=\"$vm\"}", "legendFormat": "Buffers", "instant": true },
+        { "refId": "D", "expr": "node_memory_SwapTotal_bytes{vm=\"$vm\"} - node_memory_SwapFree_bytes{vm=\"$vm\"}", "legendFormat": "Swap used", "instant": true },
+        { "refId": "E", "expr": "node_memory_MemTotal_bytes{vm=\"$vm\"}", "legendFormat": "Total", "instant": true }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "min": 0, "color": { "mode": "fixed", "fixedColor": "blue" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Used" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } } ] },
+          { "matcher": { "id": "byName", "options": "Swap used" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ] },
+          { "matcher": { "id": "byName", "options": "Total" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "text" } } ] }
+        ]
+      },
+      "options": { "displayMode": "basic", "orientation": "horizontal", "showUnfilled": true, "minVizHeight": 10, "minVizWidth": 0, "valueMode": "color", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+
+    { "type": "row", "title": "Tasks, load & uptime", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 8 }, "collapsed": false, "id": 101 },
+
+    {
+      "type": "stat", "title": "Uptime", "id": 10,
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "time() - node_boot_time_seconds{vm=\"$vm\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+    {
+      "type": "stat", "title": "Load (1m)", "id": 11,
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "description": "Red once load exceeds the core count (12 here) — that's the point where runnable work outpaces CPUs.",
+      "targets": [ { "refId": "A", "expr": "node_load1{vm=\"$vm\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 2, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 8 }, { "color": "red", "value": 12 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value" }
+    },
+    {
+      "type": "stat", "title": "Processes", "id": 12,
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "node_processes_pids{vm=\"$vm\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+    {
+      "type": "stat", "title": "Threads", "id": 13,
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [ { "refId": "A", "expr": "node_processes_threads{vm=\"$vm\"}", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+    {
+      "type": "stat", "title": "Running", "id": 14,
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "description": "Processes in state R. Fallback is `count(...) * 0`, not `vector(0)`: it must show 'No data' if the processes collector isn't reporting, rather than a reassuring 0.",
+      "targets": [ { "refId": "A", "expr": "sum(node_processes_state{vm=\"$vm\", state=\"R\"}) OR on() (count(node_processes_state{vm=\"$vm\"}) * 0)", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+    },
+    {
+      "type": "stat", "title": "Zombie", "id": 15,
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "description": "State Z. node_exporter only emits states that currently exist, so with no zombies the series is ABSENT — the `count(...) * 0` fallback turns that into a true 0 while still showing 'No data' if the collector is off entirely.",
+      "targets": [ { "refId": "A", "expr": "sum(node_processes_state{vm=\"$vm\", state=\"Z\"}) OR on() (count(node_processes_state{vm=\"$vm\"}) * 0)", "instant": true } ],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value" }
+    },
+
+    { "type": "row", "title": "Trends", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 }, "collapsed": false, "id": 102 },
+
+    {
+      "type": "timeseries", "title": "CPU by mode (stacked)", "id": 20,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "description": "htop's coloured CPU bars over time. idle excluded so the stack reads as total busy %.",
+      "targets": [ { "refId": "A", "expr": "100 * avg by (mode) (rate(node_cpu_seconds_total{vm=\"$vm\", mode!=\"idle\"}[$__rate_interval]))", "legendFormat": "{{mode}}" } ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 40, "showPoints": "never", "stacking": { "mode": "normal", "group": "A" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+    {
+      "type": "timeseries", "title": "Memory breakdown", "id": 21,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "targets": [
+        { "refId": "A", "expr": "node_memory_MemTotal_bytes{vm=\"$vm\"} - node_memory_MemAvailable_bytes{vm=\"$vm\"}", "legendFormat": "Used" },
+        { "refId": "B", "expr": "node_memory_Cached_bytes{vm=\"$vm\"}", "legendFormat": "Cached" },
+        { "refId": "C", "expr": "node_memory_Buffers_bytes{vm=\"$vm\"}", "legendFormat": "Buffers" },
+        { "refId": "D", "expr": "node_memory_MemFree_bytes{vm=\"$vm\"}", "legendFormat": "Free" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 30, "showPoints": "never", "stacking": { "mode": "normal", "group": "A" } } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "calcs": ["last"] }, "tooltip": { "mode": "multi", "sort": "desc" } }
+    },
+
+    { "type": "row", "title": "What's actually using it (per container)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }, "collapsed": false, "id": 103 },
+
+    {
+      "type": "table", "title": "Per-container CPU & memory — the low-cardinality stand-in for htop's process list", "id": 30,
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "description": "cadvisor per-container usage, sorted by CPU. container!=\"\" drops the root cgroup, which has no container label and would otherwise show as a phantom row for the whole machine.",
+      "targets": [
+        { "refId": "A", "expr": "sum by (container) (rate(container_cpu_usage_seconds_total{vm=\"$vm\", container!=\"\"}[$__rate_interval]))", "instant": true, "format": "table" },
+        { "refId": "B", "expr": "sum by (container) (container_memory_working_set_bytes{vm=\"$vm\", container!=\"\"})", "instant": true, "format": "table" }
+      ],
+      "transformations": [
+        { "id": "joinByField", "options": { "byField": "container", "mode": "outer" } },
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "Time 1": true, "Time 2": true }, "renameByName": { "container": "Container", "Value #A": "CPU (cores)", "Value #B": "Memory" } } },
+        { "id": "sortBy", "options": { "fields": {}, "sort": [ { "field": "CPU (cores)", "desc": true } ] } }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "CPU (cores)" }, "properties": [ { "id": "unit", "value": "short" }, { "id": "decimals", "value": 3 }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "min", "value": 0 } ] },
+          { "matcher": { "id": "byName", "options": "Memory" }, "properties": [ { "id": "unit", "value": "bytes" }, { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } }, { "id": "min", "value": 0 } ] }
+        ]
+      },
+      "options": { "showHeader": true, "cellHeight": "sm" }
+    },
+
+    { "type": "row", "title": "Process snapshot (point-in-time, from journald)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 }, "collapsed": false, "id": 104 },
+
+    {
+      "type": "logs", "title": "Top processes by CPU — snapshot every 2m (scroll back to any point in time)", "id": 40,
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 33 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "description": "Needs perceptor-ps-snapshot.timer on the VM. This is a LOG, not metrics, on purpose: per-process metrics are a cardinality bomb (a series per PID, and PIDs churn), whereas ~20 logfmt lines every 2m is flat cardinality and still answers 'what was hot at 14:05?'. Emitted rank 20->01 so this newest-first panel renders each snapshot hottest-first. Use `| logfmt` to filter, e.g. `| logfmt | cpu > 50`.",
+      "targets": [ { "refId": "A", "expr": "{job=\"systemd-journal\", vm=~\"$vm\", service_name=\"perceptor-ps-snapshot.service\"}" } ],
+      "options": { "showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending", "prettifyLogMessage": false }
+    }
+  ]
+}
