@@ -24,11 +24,22 @@ up: ## Start the whole stack (after `make render`)
 down: ## Stop the stack (keeps volumes/data)
 	@$(COMPOSE) down
 
-reload: render ## Re-render config, apply compose changes (new services), and restart to pick it up
+reload: render ## Re-render config, apply compose changes, restart, and re-import dashboards into every project org
 	@$(COMPOSE) --env-file .env up -d                        # create/recreate any new or changed services (e.g. alloy)
 	@$(COMPOSE) --env-file .env restart caddy otel-collector mimir loki tempo grafana alloy  # re-read rendered/provisioned config
+	@$(MAKE) --no-print-directory bootstrap-orgs             # dashboards are config too — see why this is NOT optional, below
 
-bootstrap-orgs: ## Create each project's Grafana org + tenant-pinned datasources (idempotent)
+# Why reload must end in bootstrap-orgs: only the ADMIN org (1) is file-provisioned
+# from docker/grafana/dashboards (Grafana rescans it every 30s). Project orgs are
+# created at runtime, so file provisioning cannot reach them — they hold copies
+# API-imported by grafana-bootstrap.sh. Without this line a dashboard fix goes live
+# in the admin org and stays SILENTLY STALE in every project org, which is where
+# people actually look. The import is overwrite=true and the whole script is
+# idempotent (existing orgs/datasources just 409), so re-running it is safe and
+# cheap. It waits for Grafana's /api/health, so running it right after the restart
+# above is fine.
+
+bootstrap-orgs: ## Create each project's Grafana org + tenant-pinned datasources, and import dashboards (idempotent)
 	@set -a; . ./.env; set +a; bash scripts/grafana-bootstrap.sh
 
 delete-tenant: venv ## Fully remove a tenant: config + Grafana org + stale files (TENANT=<id>; PURGE_DATA=1 also wipes its S3 data)
