@@ -305,6 +305,15 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_ORG_CREATE: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      # SMTP for alert EMAIL delivery — all optional, off by default (see the
+      # SMTP block in .env.example). Without this an email contact point is a
+      # black hole: the rule fires, Grafana "sends", nothing has a mail server.
+      GF_SMTP_ENABLED: ${GF_SMTP_ENABLED:-false}
+      GF_SMTP_HOST: ${GF_SMTP_HOST:-}
+      GF_SMTP_USER: ${GF_SMTP_USER:-}
+      GF_SMTP_PASSWORD: ${GF_SMTP_PASSWORD:-}
+      GF_SMTP_FROM_ADDRESS: ${GF_SMTP_FROM_ADDRESS:-}
+      GF_SMTP_FROM_NAME: ${GF_SMTP_FROM_NAME:-Perceptor Alerts}
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro

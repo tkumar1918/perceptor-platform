@@ -31,6 +31,13 @@ contactPoints:
       #   settings:
       #     url: https://example.com/alert-hook
 
+      # Email — REQUIRES the GF_SMTP_* block in .env (see .env.example);
+      # without SMTP configured this receiver silently sends nothing.
+      # - uid: cp-platform-email
+      #   type: email
+      #   settings:
+      #     addresses: ops@example.com   # ; separated for multiple
+
 policies:
   - orgId: 1
     receiver: platform-ops
