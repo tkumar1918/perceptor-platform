@@ -1,14 +1,38 @@
 # Identity model — tenant, token, service, VM
 
 Read this once and the whole platform makes sense. Every piece of telemetry
-carries a handful of identities, and each answers a different question:
+carries a handful of identities, and each answers a different question.
 
-| Identity | Question it answers | Who sets it | Security boundary? |
-|---|---|---|---|
-| **tenant** (`X-Scope-OrgID`) | *whose data is this?* | the **edge** (Caddy), never the app | **YES — the only one** |
-| **service_name** | *which app inside the project?* | the app (`OTEL_SERVICE_NAME`) | no — just a label |
-| **vm** | *which machine?* | the VM agent (`VM_NAME` in its `.env`) | no — just a label |
-| **deployment_environment** | *dev / staging / prod of that app?* | the app (`OTEL_RESOURCE_ATTRIBUTES`) | no — just a label |
+There are **two streams** producing telemetry, and each identity belongs to one
+or both:
+
+- **APP** — your application's OTel SDK, pushing traces/logs/metrics with the
+  project token.
+- **INFRA** — the VM agent (Alloy), pushing the machine's host + container
+  telemetry with its own token. Everything on this path is stamped
+  `telemetry_source=infra`, which is how the two streams share a tenant without
+  being confused for each other (app dashboards filter it out with
+  `telemetry_source!="infra"`).
+
+| Identity | Question it answers | Stream | Who sets it | Security boundary? |
+|---|---|---|---|---|
+| **tenant** (`X-Scope-OrgID`) | *whose data is this?* | both | the **edge** (Caddy), from the token — never the sender | **YES — the only one** |
+| **service_name** | *which app / which unit?* | both | APP: `OTEL_SERVICE_NAME` · INFRA: derived (see below) | no — just a label |
+| **deployment_environment** / **environment** | *dev / test / prod?* | both | APP: `OTEL_RESOURCE_ATTRIBUTES` · INFRA: `perceptor.environment` container label | no |
+| **vm** | *which machine?* | **infra only** | the agent (`VM_NAME` in its `.env`) | no |
+| **telemetry_source** | *app stream or infra stream?* | infra only (`=infra`) | the agent, hardcoded | no |
+| **job** | *which infra source?* (`docker` / `systemd-journal` / `nginx`) | infra only | the agent config | no |
+| **container** | *which container?* | infra only | the agent (from the Docker name) | no |
+
+App telemetry never carries `vm`, `job`, or `container` — if you see those, you
+are looking at the infra stream. Infra telemetry never carries an app's
+`OTEL_SERVICE_NAME` — its `service_name` is derived per source:
+
+| Infra source | Its `service_name` becomes |
+|---|---|
+| container logs (opted-in) | `perceptor.service_name` compose label, else the container name |
+| host/system logs (journald) | the systemd unit (`cron.service`, `sshd.service`, …) |
+| host nginx logs | `nginx` |
 
 The one-sentence version: **the tenant is a wall; everything else is a filter.**
 Walls are enforced by the platform. Filters are self-declared by apps and agents
@@ -57,12 +81,19 @@ tenant: test-proj-b                      ← the wall (one token, one Grafana or
 └── (infra, if dedicated VM): vm=proj-b-vm-1   ← host metrics/logs, SAME tenant
 ```
 
-A concrete line of telemetry, as stored:
+A concrete line of telemetry from each stream, as stored:
 
 ```
-tenant=test-proj-b  service_name=test-proj-b-app  deployment_environment=test  →  one trace
-tenant=_infra-test-shared-vm  vm=tushar-test-shared-vm  job=docker  →  one container log line
+APP:    tenant=test-proj-b  service_name=test-proj-b-app  deployment_environment=test   → one trace
+INFRA:  tenant=_infra-test-shared-vm  telemetry_source=infra  vm=tushar-test-shared-vm
+        job=docker  container=proj-b-otel-test-1  service_name=test-proj-b-app          → one container log line
 ```
+
+Note the last one: the *same app* appears in both streams under the same
+`service_name` — its SDK pushes app telemetry to `test-proj-b`, while the VM
+agent independently ships that container's stdout to the group's infra tenant.
+Two paths, two tenants, one name — that's `perceptor.service_name` doing its
+job of keeping the identities aligned.
 
 ## VMs — the one place tokens get subtle
 
