@@ -111,6 +111,66 @@ Reserved tenants (ids starting `_`) are platform namespaces: they get a token
 and storage like any tenant, but no Grafana org — they're read from the admin
 org, or via the read-only group datasources.
 
+## One tenant per environment, or one for all?
+
+A project with several environments (prod, dev, staging) has two correct
+shapes, and the choice follows from the wall/filter rule.
+
+**Default: one tenant, environments as labels.** Each app sets
+`deployment.environment` (a tiny enum — see naming below); the platform
+indexes it on all three signals, so one org shows every environment and any
+dashboard filters by it. One token, one org, and if the envs share a
+dedicated VM, no group is needed. This is the row "an environment of an
+existing app → no new tenant" in the table below, and it should be your
+starting point.
+
+**Split into per-env tenants when an environment needs its own wall.**
+Everything the platform *enforces* is per-tenant; a label can slice data but
+can never protect one environment from another:
+
+| Property | Merged (one tenant + labels) | Split (tenant per env) |
+|---|---|---|
+| Ingestion limits (`ingestion_rate`, `max_series`, trace/log rates) | one shared pool — a dev flood or load test spends prod's quota | independent — the noisy env throttles alone |
+| Retention (`*_retention`) | one policy for all envs | per env — trim the noisy env, keep prod's history |
+| Write rejections when a limit trips | hit every env in the tenant | stay inside the offending env |
+| Grafana visibility | one org sees all envs | one org per env — contractors can get dev without prod |
+| Query cost | equal — `deployment_environment` is indexed, so a prod-scoped query never reads dev's chunks | equal |
+| Moving parts | 1 token, 1 org | 2 tokens, 2 orgs — plus a group if the envs share a VM |
+
+The decision rule: **symmetric, well-behaved environments → merge and filter
+by label. A known-asymmetric environment — log-heavy dev, frequent load
+tests, experimental instrumentation — or an audience split → give it its own
+tenant**, because limits and retention are walls only at the tenant level.
+Note what splitting does *not* buy: query speed (the label already bounds
+reads) and cross-tenant correlation (one org can no longer graph prod and dev
+side by side).
+
+The shared-box corollary: split envs that share one machine are two tenants
+on one VM — a shared box like any other, so the agent needs a group
+(`group: <project>` on both tenants + a reserved `_infra-<project>`), exactly
+as if they were unrelated projects. Merged envs on a dedicated box skip that
+entirely.
+
+```yaml
+# Split example: dev is log-heavy — protect prod's quota, trim dev's logs.
+tenants:
+  - id: visual-scoring-prod
+    display_name: Visual Scoring (production)
+    group: visual-scoring        # both envs share one VM
+    metrics_retention: 90d
+  - id: visual-scoring-dev
+    display_name: Visual Scoring (development)
+    group: visual-scoring
+    logs_retention: 168h         # 7d — the noisy env keeps a short tail
+reserved:
+  - id: _infra-visual-scoring    # required by the group
+```
+
+A misconfigured app is the residual risk of merging: `deployment_environment`
+is self-declared, so a dev deploy claiming `production` pollutes prod
+*dashboards* (never another tenant). If that must be impossible rather than
+unlikely, that's an audience/wall requirement — split.
+
 ## Naming conventions
 
 - **tenant id** — lowercase slug `[a-z0-9-]`, enforced by `make render`. It
@@ -133,7 +193,7 @@ org, or via the read-only group datasources.
 | Adding… | Tenant? | Token? | What you actually do |
 |---|---|---|---|
 | a microservice to an existing project | no | no — reuse the project's | new `OTEL_SERVICE_NAME`, same `OTEL_EXPORTER_OTLP_HEADERS` |
-| an environment of an existing app | no | no | set `deployment.environment` in `OTEL_RESOURCE_ATTRIBUTES` |
+| an environment of an existing app | usually no | no | set `deployment.environment` in `OTEL_RESOURCE_ATTRIBUTES`; split it into its own tenant only when it needs its own limits/retention — see [One tenant per environment, or one for all?](#one-tenant-per-environment-or-one-for-all) |
 | a dedicated VM for a project | no | no — reuse the project's | install the agent with the project token + a new `VM_NAME` |
 | a new project | **yes** | auto-generated | add it to `tenants.yaml`, `make reload` |
 | a shared VM for several projects | yes — reserved `_infra-<group>` | auto-generated | add the reserved tenant + `group:` on each project, `make reload`; the agent gets the group token |

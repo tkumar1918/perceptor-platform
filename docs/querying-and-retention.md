@@ -119,7 +119,10 @@ lake) and query there.
 ## 6. Tuning in this stack
 
 - **Retention** is per-tenant in `tenants.yaml` (`logs_retention`,
-  `metrics_retention`, `traces_retention`) → `make render`.
+  `metrics_retention`, `traces_retention`) → `make render`. Per-tenant is the
+  finest grain — an environment that needs its own retention or limits needs
+  its own tenant, not a label; see the environment-splitting section in
+  [identity-model.md](./identity-model.md).
 - **`max_query_length`** is not exposed per-tenant; it uses Loki's `30d1h`
   default. To allow wider single queries, add it to Loki's `limits_config`
   (global) or per-tenant overrides — raise it deliberately and modestly
