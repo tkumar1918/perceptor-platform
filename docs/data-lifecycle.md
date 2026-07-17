@@ -1,177 +1,136 @@
-# Where your data lives — memory, disk, and S3 (read this before asking "is it in S3 yet?")
+# Data lifecycle — memory, local WAL, S3
 
-This doc exists to kill a recurring confusion:
+Where telemetry lives at each moment between an app emitting it and it being
+durable. The recurring confusions this answers:
 
 > "I sent telemetry a minute ago — why isn't it in the S3 bucket?"
 > "If it's not in S3 yet, is it lost?"
-> "How am I able to *query* it in Grafana when it's not in S3?"
+> "How can I query it in Grafana when it's not in S3?"
 
-All three have the same root: **data does not go straight to S3, and "in S3" is
-not the same event as "queryable."** Once you internalize the three-tier model
-below, none of it is mysterious.
+All three have one root: **data does not go straight to S3, and "in S3" is
+not the same event as "queryable".** Companion:
+[querying-and-retention.md](./querying-and-retention.md) covers the read
+side.
 
-> Companion to [querying-and-retention.md](./querying-and-retention.md), which
-> covers the *read* side (why a narrow query on old data is cheap). This doc
-> covers the *write* side (how data moves from an app to durable storage).
+## Mental model
 
----
-
-## TL;DR mental model
-
-- Telemetry lands in three tiers, in order: **ingester memory → local WAL (the
-  instance's disk) → object storage (S3)**. It is promoted between tiers on a
-  **flush cadence**, not instantly.
-- **The flush cadence differs per signal.** Traces reach S3 in ~minutes; logs in
-  minutes-to-hours; **metrics can take up to ~2 hours.**
-- **Flush is triggered by time OR size — whichever comes first** — not a fixed
-  "N minutes after ingest" timer.
-- **"In S3" = durability. "Queryable" = the ingesters.** They are different
-  events. **Querying does not wait for S3** — the ingesters serve recent data
-  from memory the moment it arrives. ← the single most important sentence here.
-- **Unflushed data lives only in memory + local WAL.** It survives a container
-  *restart* (WAL replay) but **not** loss of the instance/volume. With
-  single-node `replication_factor: 1`, that local WAL is the only copy until the
-  flush lands in S3.
-
----
+- Telemetry lands in three tiers, in order: **ingester memory → local WAL →
+  object storage (S3)**, promoted on a flush cadence, not instantly.
+- The cadence differs per signal: traces reach S3 in minutes, logs in
+  minutes-to-hours, metrics in up to ~2 hours.
+- Flush triggers on **time or size, whichever comes first** — not a fixed
+  timer after ingest.
+- **"In S3" means durable. "Queryable" means the ingesters.** Querying does
+  not wait for S3 — ingesters serve recent data from memory the moment it
+  arrives.
+- Unflushed data lives only in memory + local WAL. It survives a container
+  restart (WAL replay) but not loss of the instance or volume.
 
 ## 1. The three tiers
 
 ```
   app ──OTLP──▶ Caddy ──▶ OTel gateway ──▶ [ INGESTER ]
-                                             │  1. MEMORY (head)   ── most recent data, RAM
-                                             │  2. WAL on LOCAL DISK ── crash-recovery copy
-                                             │        (docker volume on the instance)
-                                             ▼  3. flush ──▶ [ S3 ] block/chunk ── durable, long-term
+                                             │  1. MEMORY (head)    — newest data, RAM
+                                             │  2. WAL on LOCAL DISK — crash-recovery copy
+                                             ▼  3. flush ──▶ [ S3 ]  — durable blocks/chunks
                                                               └▶ compactor merges small → large
 ```
 
-| Tier | What it is | Where (this stack) | Survives… |
+| Tier | What it is | Where (this stack) | Survives |
 |---|---|---|---|
-| **Memory** | the ingester's in-RAM head — newest samples/spans/lines | container RAM | nothing (lost on stop) |
-| **Local WAL** | write-ahead log: an on-disk mirror of the head for crash recovery | docker volumes on the instance (`mimir-data`, `loki-data`, `tempo-data`) | container **restart** (WAL replay), **not** volume/instance loss |
-| **S3** | flushed, immutable blocks/chunks + index | `lgtm-*` buckets (AWS S3) | container **and** instance loss |
+| Memory | the ingester's in-RAM head — newest samples/spans/lines | container RAM | nothing |
+| Local WAL | write-ahead log mirroring the head, for crash recovery | docker volumes (`mimir-data`, `loki-data`, `tempo-data`) | container restart (WAL replay); **not** volume/instance loss |
+| S3 | flushed, immutable blocks/chunks + index | the configured buckets | container and instance loss |
 
-Data is **only durable once it's in S3.** Memory and WAL are staging.
+Data is durable only once it is in S3; memory and WAL are staging.
 
----
+## 2. Flush cadence per signal (this stack's config)
 
-## 2. The flush cadence — per signal, from *this stack's* config
-
-Each backend promotes memory → S3 on **whichever fires first: a time threshold or
-a size threshold.** The values below are from your actual configs.
-
-| Signal | Backend | Reaches S3 after… | Config |
+| Signal | Backend | Reaches S3 after | Config |
 |---|---|---|---|
-| **Traces** | Tempo | **~minutes** — a block is cut every `5m` **or** at `1 MB`, after a trace is idle `10s` | `max_block_duration: 5m`, `max_block_bytes: 1_000_000`, `trace_idle_period: 10s` |
-| **Logs** | Loki | **minutes → ~2h** — a chunk flushes at `30m` idle **or** `2h` max age **or** ~`1.5 MB` target | Loki defaults (not overridden) |
-| **Metrics** | Mimir | **up to ~2h** — the TSDB head is compacted into a **2-hour block**, then shipped | `blocks_storage.tsdb` default `2h` block range |
+| Traces | Tempo | **~minutes** — a block cuts every 5m or at 1 MB, after a trace is idle 10s | `max_block_duration: 5m`, `max_block_bytes: 1_000_000`, `trace_idle_period: 10s` in `docker/tempo/tempo.yaml` |
+| Logs | Loki | **minutes → ~2h** — a chunk flushes at 30m idle, 2h max age, or ~1.5 MB | Loki defaults (not overridden) |
+| Metrics | Mimir | **up to ~2h** — the TSDB head compacts into a 2-hour block, then ships | `blocks_storage.tsdb` default 2h block range |
 
-So the order data shows up in S3 is: **traces first, then logs, then metrics.**
-Low-volume streams take the *longest* (they hit the time trigger, never the size
-trigger) — which is why a quiet tenant's logs can sit in the ingester for up to
-2h before a single chunk appears in the bucket.
+So S3 fills in order: traces first, then logs, then metrics. Low-volume
+streams take the longest — they never hit the size trigger, so they wait for
+the time trigger. An empty-looking bucket five minutes after sending metrics
+is normal, not a bug.
 
-**This is normal and healthy.** An empty-looking bucket 5 minutes after you send
-metrics is not a bug — the 2-hour block hasn't been cut yet.
+## 3. Why data is queryable before it reaches S3
 
----
-
-## 3. Why you can query data that isn't in S3 yet
-
-The read path reads from **both** tiers and stitches them:
-
-- **Ingesters** answer for **recent** data straight from memory/WAL — before it is
-  ever flushed.
-- **Store-gateway / queriers** answer for **older** data by reading blocks from S3.
-- The query-frontend merges the two; Grafana just sees one seamless result.
+The read path reads both tiers and merges:
 
 ```
-Grafana query ─▶ query-frontend ─┬─▶ ingester   (recent: memory/WAL)
-                                 └─▶ store/S3    (older: flushed blocks)
-                                     └── merged ──▶ result
+Grafana query ─▶ query-frontend ─┬─▶ ingester    (recent: memory/WAL)
+                                 └─▶ store / S3  (older: flushed blocks)
+                                      └── merged ──▶ one result
 ```
 
-So **"is it queryable?" and "is it in S3?" are answered by different components.**
-Freshly-ingested data is queryable in seconds; it becomes *durable* minutes-to-
-hours later. Don't validate ingestion by staring at the bucket — **query it in
-Grafana.**
+Ingesters answer for recent data straight from memory; store-gateways and
+queriers answer for older data from S3 blocks. Freshly ingested data is
+queryable in seconds and becomes durable minutes-to-hours later. Don't
+validate ingestion by watching the bucket — query Grafana.
 
----
-
-## 4. How to check each thing (they need different tools)
+## 4. Checking each property
 
 | Question | Check | How |
 |---|---|---|
-| "Is my data **retrievable**?" | the read path | Grafana → the project's org → query Loki/Mimir/Tempo |
-| "Is my data **durable** (in S3)?" | object storage | `aws s3 ls s3://<bucket>/<tenant>/ --recursive` |
-| "Is it still only in memory/WAL?" | the gap between the two | queryable **but** not in the bucket yet = staged, not durable |
+| Is my data retrievable? | the read path | Grafana → the project's org → query it |
+| Is my data durable (in S3)? | object storage | `aws s3 ls s3://<bucket>/<tenant>/ --recursive` |
+| Is it still only in memory/WAL? | the gap between the two | queryable but not in the bucket = staged, not yet durable |
 
-Worked example (project-tutor, verified against the live buckets):
+A worked example (verified against live buckets) of the lopsided counts the
+cadence produces — not a problem:
 
 ```
-metrics  s3://lgtm-mimir-blocks-2026/project-tutor/…   55 objects  (2h blocks)
-logs     s3://lgtm-loki-data-2026/project-tutor/…        2 objects  (low volume → slow flush)
-traces   s3://lgtm-tempo-data-2026/project-tutor/…      14 objects  (~5m blocks)
+metrics  s3://…mimir…/project-tutor/   55 objects  (2h blocks)
+logs     s3://…loki…/project-tutor/     2 objects  (low volume → slow flush)
+traces   s3://…tempo…/project-tutor/   14 objects  (~5m blocks)
 ```
 
-The lopsided counts are exactly the cadence in §2, not a problem: traces flush
-fast and often, metrics come in 2h chunks, and low log volume means most lines
-are still in the ingester.
+## 5. Durability — what is at risk, and when
 
----
+At any moment, some data is only in memory + local WAL:
 
-## 5. Durability — what's actually at risk, and when
-
-Because promotion to S3 lags, at any moment some data is **only in memory + local
-WAL**:
-
-- **Metrics:** up to ~2h of the most recent samples (the un-shipped TSDB head).
+- **Metrics:** up to ~2h of the newest samples (the unshipped TSDB head).
 - **Logs:** any chunk not yet flushed (idle < 30m, age < 2h, under size).
 - **Traces:** the last few minutes (open block + idle window).
 
-What that means:
+Consequences:
 
-- **Container restart** → fine. On boot the ingester **replays the WAL** from its
-  local volume; nothing is lost.
-- **Loss of the instance / the docker volume** → the un-flushed window is **gone**.
-  Anything already in S3 is safe.
-- This stack runs **`replication_factor: 1`** (single node), so the local WAL is
-  the *only* copy of un-flushed data — there is no second ingester holding it.
+- **Container restart** — fine; the ingester replays its WAL on boot.
+- **Loss of the instance or the docker volume** — the unflushed window is
+  gone. Everything already in S3 is safe.
+- This stack runs `replication_factor: 1` (single node), so the local WAL is
+  the only copy of unflushed data.
 
-Mitigations if that window matters: shorten flush intervals (more S3 writes, more
-cost), back up the WAL volumes, or move to a replicated/multi-node setup. For most
-uses the default cadence is the right trade-off — just **know the window exists.**
+If that window matters: shorten flush intervals (more S3 writes), back up the
+WAL volumes, or move to a replicated multi-node setup. For most uses the
+default cadence is the right trade-off — just know the window exists.
 
----
+## 6. Common confusions
 
-## 6. Common confusions, answered
+- **"I sent metrics, the bucket is empty — broken?"** No; metrics ship as
+  2-hour blocks. Query Grafana instead — it's served from the ingester
+  immediately.
+- **"Traces are in S3 but metrics aren't — inconsistent?"** Expected;
+  different cadence (§2).
+- **"A quiet project's logs never reach S3."** They will, on the 2h max-age
+  timer; low volume never hits the size trigger.
+- **"It's queryable, so it's safe?"** Not necessarily — queryable ≠ durable
+  (§5).
+- **"Do I need S3 to query recent data?"** No; recent data comes from the
+  ingester. S3 is durability and history.
 
-- **"I sent metrics, the bucket is empty — broken?"** No. Metrics ship as 2-hour
-  blocks. Check again after the block cuts, or just **query Grafana** (served from
-  the ingester immediately).
-- **"Traces are in S3 but metrics aren't — inconsistent?"** Expected. Different
-  cadence (§2): traces ~5m, metrics ~2h.
-- **"A quiet project's logs never reach S3."** They will — on the `2h` max-age
-  timer. Low volume never hits the size trigger, so it waits for the time trigger.
-- **"It's queryable, so it's safe, right?"** Not necessarily. Queryable ≠ durable.
-  Until it's in S3 it lives only in memory + local WAL (§5).
-- **"Do I need S3 to query recent data?"** No. Recent data is served from the
-  ingester. S3 is for durability and older data.
+## 7. Related knobs
 
----
-
-## 7. Related knobs in this project
-
-- **Flush cadence:** Tempo in [`docker/tempo/tempo.yaml`](../docker/tempo/tempo.yaml)
-  (`max_block_duration`, `max_block_bytes`, `trace_idle_period`); Mimir's 2h block
-  range is the default; Loki uses defaults (add `ingester.chunk_idle_period` /
-  `max_chunk_age` to [`docker/loki/loki.yaml`](../docker/loki/loki.yaml) to change).
-- **Retention** (how long S3 keeps it) is per-tenant in
-  [`tenants.yaml`](../tenants.yaml) → `make render`. See
-  [querying-and-retention.md](./querying-and-retention.md).
-- **WAL/volume locations:** `mimir-data` (`/data/mimir`), `loki-data`
-  (`/var/loki`), `tempo-data` (`/var/tempo`) in
-  [`docker/docker-compose.yml`](../docker/docker-compose.yml) — these hold the
-  un-flushed window; back them up if that data is precious.
-```
+- **Flush cadence:** Tempo in `docker/tempo/tempo.yaml`; Mimir's 2h block
+  range is the default; Loki uses defaults (set
+  `ingester.chunk_idle_period` / `max_chunk_age` in `docker/loki/loki.yaml`
+  to change).
+- **Retention** (how long S3 keeps data) is per-tenant in `tenants.yaml` →
+  `make render`; see [querying-and-retention.md](./querying-and-retention.md).
+- **WAL volumes:** `mimir-data`, `loki-data`, `tempo-data` in
+  `docker/docker-compose.yml` hold the unflushed window — back them up if
+  that data is precious.
