@@ -2,14 +2,20 @@
   "uid": "perceptor-infra-services",
   "id": null,
   "title": "Infrastructure — Host & running services",
-  "tags": ["perceptor", "infra"],
+  "tags": [
+    "perceptor",
+    "infra"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
   "editable": true,
   "graphTooltip": 1,
   "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "description": "Host vitals (CPU/RAM/disk/net), systemd unit health, and host/system logs — what's running on the box and whether it's healthy. Container-specific views live on Infrastructure — Docker containers; nginx on Infrastructure — Nginx. Works in ANY org: pick the Mimir/Loki datasource for the tenant you're viewing.",
   "templating": {
     "list": [
@@ -35,141 +41,782 @@
         "name": "vm",
         "label": "VM",
         "type": "query",
-        "datasource": { "type": "prometheus", "uid": "${mimir}" },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${mimir}"
+        },
         "query": "label_values(node_uname_info, vm)",
         "refresh": 2,
         "sort": 1,
         "multi": true,
         "includeAll": true,
         "allValue": ".*",
-        "current": { "text": "All", "value": "$__all" }
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "exclude",
+        "label": "Hide services (regex)",
+        "type": "textbox",
+        "query": "systemd-.*|getty@.*|user@.*|dbus.*|polkit.*|accounts-daemon.*|networkd-dispatcher.*|rsyslog.*|cron.*|atd.*|acpid.*|apparmor.*|unattended-upgrades.*|apport.*|irqbalance.*|multipathd.*|thermald.*|ModemManager.*|NetworkManager.*|wpa_supplicant.*|avahi-.*|bluetooth.*|cups.*|colord.*|gdm.*|plymouth.*|rtkit-.*|snapd.*|udisks2.*|upower.*|packagekit.*|power-profiles-daemon.*|switcheroo-control.*|fwupd.*|kerneloops.*|whoopsie.*|gnome-.*|xdg-.*|flatpak-.*|console-setup.*|keyboard-setup.*|kmod-static-nodes.*|setvtrgb.*|alsa-restore.*|user-runtime-dir@.*|sysstat.*",
+        "current": {
+          "text": "systemd-.*|getty@.*|user@.*|dbus.*|polkit.*|accounts-daemon.*|networkd-dispatcher.*|rsyslog.*|cron.*|atd.*|acpid.*|apparmor.*|unattended-upgrades.*|apport.*|irqbalance.*|multipathd.*|thermald.*|ModemManager.*|NetworkManager.*|wpa_supplicant.*|avahi-.*|bluetooth.*|cups.*|colord.*|gdm.*|plymouth.*|rtkit-.*|snapd.*|udisks2.*|upower.*|packagekit.*|power-profiles-daemon.*|switcheroo-control.*|fwupd.*|kerneloops.*|whoopsie.*|gnome-.*|xdg-.*|flatpak-.*|console-setup.*|keyboard-setup.*|kmod-static-nodes.*|setvtrgb.*|alsa-restore.*|user-runtime-dir@.*|sysstat.*",
+          "value": "systemd-.*|getty@.*|user@.*|dbus.*|polkit.*|accounts-daemon.*|networkd-dispatcher.*|rsyslog.*|cron.*|atd.*|acpid.*|apparmor.*|unattended-upgrades.*|apport.*|irqbalance.*|multipathd.*|thermald.*|ModemManager.*|NetworkManager.*|wpa_supplicant.*|avahi-.*|bluetooth.*|cups.*|colord.*|gdm.*|plymouth.*|rtkit-.*|snapd.*|udisks2.*|upower.*|packagekit.*|power-profiles-daemon.*|switcheroo-control.*|fwupd.*|kerneloops.*|whoopsie.*|gnome-.*|xdg-.*|flatpak-.*|console-setup.*|keyboard-setup.*|kmod-static-nodes.*|setvtrgb.*|alsa-restore.*|user-runtime-dir@.*|sysstat.*"
+        },
+        "hide": 0
       }
     ]
   },
   "panels": [
-    { "type": "row", "title": "Fleet overview", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "collapsed": false, "id": 100 },
-
     {
-      "type": "stat", "title": "Hosts reporting", "id": 1,
-      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "count(group by (vm) (node_uname_info{vm=~\"$vm\"}))", "instant": true } ],
-      "fieldConfig": { "defaults": { "unit": "none", "color": { "mode": "fixed", "fixedColor": "text" } }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "none" }
+      "type": "row",
+      "title": "Fleet overview",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "collapsed": false,
+      "id": 100
     },
     {
-      "type": "stat", "title": "Max CPU busy", "id": 2,
-      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "max(100 * (1 - avg by (vm) (rate(node_cpu_seconds_total{mode=\"idle\", vm=~\"$vm\"}[5m]))))", "instant": true } ],
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 75 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" }
-    },
-    {
-      "type": "stat", "title": "Max memory used", "id": 3,
-      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "max(100 * (1 - node_memory_MemAvailable_bytes{vm=~\"$vm\"} / node_memory_MemTotal_bytes{vm=~\"$vm\"}))", "instant": true } ],
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 92 } ] } }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" }
-    },
-    {
-      "type": "stat", "title": "Fullest filesystem", "id": 4,
-      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "max(100 * (1 - node_filesystem_avail_bytes{vm=~\"$vm\", mountpoint!=\"\"} / node_filesystem_size_bytes{vm=~\"$vm\", mountpoint!=\"\"}))", "instant": true } ],
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 80 }, { "color": "red", "value": 90 } ] } }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" }
-    },
-
-    { "type": "row", "title": "Host — CPU, memory, disk", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }, "collapsed": false, "id": 101 },
-
-    {
-      "type": "timeseries", "title": "CPU busy % (per VM)", "id": 10,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "100 * (1 - avg by (vm) (rate(node_cpu_seconds_total{mode=\"idle\", vm=~\"$vm\"}[5m])))", "legendFormat": "{{vm}}" } ],
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
-    },
-    {
-      "type": "timeseries", "title": "Memory used % (per VM)", "id": 11,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "100 * (1 - node_memory_MemAvailable_bytes{vm=~\"$vm\"} / node_memory_MemTotal_bytes{vm=~\"$vm\"})", "legendFormat": "{{vm}}" } ],
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
-    },
-    {
-      "type": "timeseries", "title": "Filesystem used % (per mount)", "id": 12,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "100 * (1 - node_filesystem_avail_bytes{vm=~\"$vm\", mountpoint!=\"\"} / node_filesystem_size_bytes{vm=~\"$vm\", mountpoint!=\"\"})", "legendFormat": "{{vm}} {{mountpoint}}" } ],
-      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["last", "max"] }, "tooltip": { "mode": "multi" } }
-    },
-    {
-      "type": "timeseries", "title": "Load average (1m per VM)", "id": 13,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "node_load1{vm=~\"$vm\"}", "legendFormat": "{{vm}}" } ],
-      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] }, "tooltip": { "mode": "multi" } }
-    },
-
-    { "type": "row", "title": "Host — disk & network I/O", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 }, "collapsed": false, "id": 102 },
-
-    {
-      "type": "timeseries", "title": "Disk I/O (bytes/s)", "id": 20,
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "type": "stat",
+      "title": "Hosts reporting",
+      "id": 1,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (vm) (rate(node_disk_read_bytes_total{vm=~\"$vm\"}[5m]))", "legendFormat": "{{vm}} read" },
-        { "refId": "B", "expr": "-sum by (vm) (rate(node_disk_written_bytes_total{vm=~\"$vm\"}[5m]))", "legendFormat": "{{vm}} write" }
+        {
+          "refId": "A",
+          "expr": "count(group by (vm) (node_uname_info{vm=~\"$vm\"}))",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value",
+        "colorMode": "none"
+      }
     },
     {
-      "type": "timeseries", "title": "Network (bytes/s, lo excluded)", "id": 21,
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "type": "stat",
+      "title": "Max CPU busy",
+      "id": 2,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
       "targets": [
-        { "refId": "A", "expr": "sum by (vm) (rate(node_network_receive_bytes_total{vm=~\"$vm\", device!~\"lo\"}[5m]))", "legendFormat": "{{vm}} rx" },
-        { "refId": "B", "expr": "-sum by (vm) (rate(node_network_transmit_bytes_total{vm=~\"$vm\", device!~\"lo\"}[5m]))", "legendFormat": "{{vm}} tx" }
+        {
+          "refId": "A",
+          "expr": "max(100 * (1 - avg by (vm) (rate(node_cpu_seconds_total{mode=\"idle\", vm=~\"$vm\"}[5m]))))",
+          "instant": true
+        }
       ],
-      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
-      "options": { "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean"] }, "tooltip": { "mode": "multi" } }
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      }
     },
-
-    { "type": "row", "title": "systemd units (needs the systemd collector)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }, "collapsed": false, "id": 103 },
-
     {
-      "type": "stat", "title": "Failed units", "id": 30,
-      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 32 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
+      "type": "stat",
+      "title": "Max memory used",
+      "id": 3,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(100 * (1 - node_memory_MemAvailable_bytes{vm=~\"$vm\"} / node_memory_MemTotal_bytes{vm=~\"$vm\"}))",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 92
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Fullest filesystem",
+      "id": 4,
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(100 * (1 - node_filesystem_avail_bytes{vm=~\"$vm\", mountpoint!=\"\"} / node_filesystem_size_bytes{vm=~\"$vm\", mountpoint!=\"\"}))",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area"
+      }
+    },
+    {
+      "type": "row",
+      "title": "Host — CPU, memory, disk",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "collapsed": false,
+      "id": 101
+    },
+    {
+      "type": "timeseries",
+      "title": "CPU busy % (per VM)",
+      "id": 10,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg by (vm) (rate(node_cpu_seconds_total{mode=\"idle\", vm=~\"$vm\"}[5m])))",
+          "legendFormat": "{{vm}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory used % (per VM)",
+      "id": 11,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{vm=~\"$vm\"} / node_memory_MemTotal_bytes{vm=~\"$vm\"})",
+          "legendFormat": "{{vm}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Filesystem used % (per mount)",
+      "id": 12,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - node_filesystem_avail_bytes{vm=~\"$vm\", mountpoint!=\"\"} / node_filesystem_size_bytes{vm=~\"$vm\", mountpoint!=\"\"})",
+          "legendFormat": "{{vm}} {{mountpoint}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "last",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Load average (1m per VM)",
+      "id": 13,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_load1{vm=~\"$vm\"}",
+          "legendFormat": "{{vm}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Host — disk & network I/O",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "collapsed": false,
+      "id": 102
+    },
+    {
+      "type": "timeseries",
+      "title": "Disk I/O (bytes/s)",
+      "id": 20,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (vm) (rate(node_disk_read_bytes_total{vm=~\"$vm\"}[5m]))",
+          "legendFormat": "{{vm}} read"
+        },
+        {
+          "refId": "B",
+          "expr": "-sum by (vm) (rate(node_disk_written_bytes_total{vm=~\"$vm\"}[5m]))",
+          "legendFormat": "{{vm}} write"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Network (bytes/s, lo excluded)",
+      "id": 21,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (vm) (rate(node_network_receive_bytes_total{vm=~\"$vm\", device!~\"lo\"}[5m]))",
+          "legendFormat": "{{vm}} rx"
+        },
+        {
+          "refId": "B",
+          "expr": "-sum by (vm) (rate(node_network_transmit_bytes_total{vm=~\"$vm\", device!~\"lo\"}[5m]))",
+          "legendFormat": "{{vm}} tx"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "systemd units (needs the systemd collector)",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "collapsed": false,
+      "id": 103
+    },
+    {
+      "type": "stat",
+      "title": "Failed units",
+      "id": 30,
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
       "description": "0 = genuinely no failed units. 'No data' = the systemd collector isn't reporting on the selected VM (needs enable_collectors=[\"systemd\"] AND the /run/dbus/system_bus_socket mount). The fallback is `count(all units) * 0` rather than `vector(0)` on purpose: vector(0) would paint a healthy-looking 0 even when the metric doesn't exist at all, hiding a blind agent.",
-      "targets": [ { "refId": "A", "expr": "count(node_systemd_unit_state{vm=~\"$vm\", state=\"failed\"} == 1) OR on() (count(node_systemd_unit_state{vm=~\"$vm\"}) * 0)", "instant": true } ],
-      "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(node_systemd_unit_state{vm=~\"$vm\", state=\"failed\"} == 1) OR on() (count(node_systemd_unit_state{vm=~\"$vm\"}) * 0)",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "none"
+      }
     },
     {
-      "type": "table", "title": "Units not active (failed / activating / deactivating)", "id": 31,
-      "gridPos": { "h": 8, "w": 18, "x": 6, "y": 32 },
-      "datasource": { "type": "prometheus", "uid": "${mimir}" },
-      "targets": [ { "refId": "A", "expr": "node_systemd_unit_state{vm=~\"$vm\", state=~\"failed|activating|deactivating\"} == 1", "instant": true, "format": "table" } ],
-      "transformations": [ { "id": "organize", "options": { "excludeByName": { "Time": true, "Value": true }, "renameByName": { "vm": "VM", "name": "Unit", "state": "State" } } } ],
-      "options": { "showHeader": true }
+      "type": "table",
+      "title": "Units not active (failed / activating / deactivating)",
+      "id": 31,
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 32
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_systemd_unit_state{vm=~\"$vm\", state=~\"failed|activating|deactivating\"} == 1",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            },
+            "renameByName": {
+              "vm": "VM",
+              "name": "Unit",
+              "state": "State"
+            }
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true
+      }
     },
-
-    { "type": "row", "title": "Host + system logs", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 }, "collapsed": false, "id": 104 },
-
     {
-      "type": "logs", "title": "Host logs (job=systemd-journal)", "id": 40,
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 41 },
-      "datasource": { "type": "loki", "uid": "${loki}" },
-      "targets": [ { "refId": "A", "expr": "{telemetry_source=\"infra\", vm=~\"$vm\", job=\"systemd-journal\"}" } ],
-      "options": { "showTime": true, "wrapLogMessage": true, "enableLogDetails": true, "dedupStrategy": "none", "sortOrder": "Descending" }
+      "type": "table",
+      "title": "Running services (systemd, noise filtered)",
+      "id": 32,
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${mimir}"
+      },
+      "description": "Active .service units per VM — the `systemctl list-units --type=service --state=active` view. OS plumbing (systemd-*, dbus, snapd, desktop daemons, ...) is hidden by the 'Hide services' regex variable above: clear it to see everything. Deliberately keeps ssh/docker/containerd/nginx and anything a user installs visible — this panel is inventory ('what is running on my box, and did something new appear?'), not health; failures show in the panels above.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_systemd_unit_state{vm=~\"$vm\", state=\"active\", name=~\".+\\\\.service\", name!~\"$exclude\"} == 1",
+          "instant": true,
+          "format": "table",
+          "legendFormat": ""
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "state": true,
+              "telemetry_source": true,
+              "container": true
+            },
+            "renameByName": {
+              "vm": "VM",
+              "name": "Service",
+              "type": "Type"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "fields": {},
+            "sort": [
+              {
+                "field": "Service",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Host + system logs",
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 50
+      },
+      "collapsed": false,
+      "id": 104
+    },
+    {
+      "type": "logs",
+      "title": "Host logs (job=systemd-journal)",
+      "id": 40,
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 51
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${loki}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{telemetry_source=\"infra\", vm=~\"$vm\", job=\"systemd-journal\"}"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
     }
   ]
 }
